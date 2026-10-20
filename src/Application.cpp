@@ -1752,7 +1752,7 @@ void Application::RestoreFromUserAction() {
     SetForegroundWindow(mainWindow_);
     if (webViewController_) {
         ResizeWebView();
-        webViewController_->put_IsVisible(waitingForTabContent_ ? FALSE : TRUE);
+        webViewController_->put_IsVisible(TRUE);
         webViewController_->NotifyParentWindowPositionChanged();
     }
     RedrawWindow(mainWindow_, nullptr, nullptr,
@@ -1851,9 +1851,16 @@ void Application::CreateSettingsControls(HWND window) {
     heading(L"沉浸");
     label(L"挖孔半径（像素）", y);
     settingsControls_.radius = edit(SettingsRadius, y, Scale(130));
-    label(L"吸附距离", y + row);
-    settingsControls_.snap = edit(SettingsSnap, y + row, Scale(130));
-    y += row * 2;
+    y += row;
+    label(L"挖孔刷新间隔（ms）", y);
+    settingsControls_.holeRefresh = edit(SettingsHoleRefresh, y, Scale(130));
+    SendMessageW(settingsControls_.holeRefresh, EM_SETLIMITTEXT, 3, 0);
+    HWND refreshNote = CreateLabel(window, L"10–100ms，默认16ms；越小跟随越快，资源开销可能越高");
+    MoveWindow(refreshNote, fieldX + Scale(140), y + Scale(4), Scale(380), Scale(26), FALSE);
+    y += row;
+    label(L"吸附距离", y);
+    settingsControls_.snap = edit(SettingsSnap, y, Scale(130));
+    y += row;
     label(L"沉浸模式", y);
     settingsControls_.style = combo(SettingsStyle, y, Scale(230));
     SendMessageW(settingsControls_.style, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"鼠标圆形挖孔"));
@@ -1938,6 +1945,7 @@ void Application::ReadSettingsControls() {
     const auto finishUpdate = wil::scope_exit([this] { updatingSettingsControls_ = false; });
     AppSettings old = state_.settings;
     state_.settings.holeRadius = ParseInteger(settingsControls_.radius, old.holeRadius);
+    state_.settings.holeRefreshMs = ParseInteger(settingsControls_.holeRefresh, old.holeRefreshMs);
     state_.settings.snapThreshold = ParseInteger(settingsControls_.snap, old.snapThreshold);
     state_.settings.autoPauseOnHide = IsChecked(settingsControls_.autoPause);
     state_.settings.fixedWebZoomEnabled = IsChecked(settingsControls_.fixedZoom);
@@ -1958,6 +1966,8 @@ void Application::ReadSettingsControls() {
     state_.settings.renderMode = static_cast<RenderMode>(ComboValue(settingsControls_.renderMode));
     state_.settings.themeMode = static_cast<ThemeMode>(ComboValue(settingsControls_.theme));
     state_.settings.Clamp();
+    SetWindowTextW(settingsControls_.holeRefresh,
+                   std::to_wstring(state_.settings.holeRefreshMs).c_str());
     EnableWindow(settingsControls_.zoomPercent, state_.settings.fixedWebZoomEnabled ? TRUE : FALSE);
     SetWindowTextW(settingsControls_.zoomPercent,
         std::to_wstring(state_.settings.fixedWebZoomPercent).c_str());
@@ -1972,7 +1982,8 @@ void Application::ReadSettingsControls() {
     if (old.immersionStyle != state_.settings.immersionStyle ||
         old.holeOpacityPercent != state_.settings.holeOpacityPercent ||
         old.autoHideOpacityPercent != state_.settings.autoHideOpacityPercent ||
-        old.holeRadius != state_.settings.holeRadius) {
+        old.holeRadius != state_.settings.holeRadius ||
+        old.holeRefreshMs != state_.settings.holeRefreshMs) {
         windowModes_.RefreshVisualState();
     }
     if (old.disableHotkeysOnTyping != state_.settings.disableHotkeysOnTyping ||
@@ -1998,6 +2009,8 @@ void Application::RefreshSettingsControls() {
     if (!settingsWindow_) return;
     updatingSettingsControls_ = true;
     SetWindowTextW(settingsControls_.radius, std::to_wstring(state_.settings.holeRadius).c_str());
+    SetWindowTextW(settingsControls_.holeRefresh,
+                   std::to_wstring(state_.settings.holeRefreshMs).c_str());
     SetWindowTextW(settingsControls_.snap, std::to_wstring(state_.settings.snapThreshold).c_str());
     SetWindowTextW(settingsControls_.home, state_.settings.homeUrl.c_str());
     SetCheck(settingsControls_.autoPause, state_.settings.autoPauseOnHide);
@@ -2028,6 +2041,7 @@ void Application::RefreshOpacityControls() {
     if (!settingsWindow_ || !settingsControls_.opacitySlider || updatingSettingsControls_) return;
     updatingSettingsControls_ = true;
     const bool visible = state_.settings.immersionStyle == ImmersionStyle::AutoHide;
+    EnableWindow(settingsControls_.holeRefresh, visible ? FALSE : TRUE);
     const int value = state_.settings.autoHideOpacityPercent;
     SendMessageW(settingsControls_.opacitySlider, TBM_SETPOS, TRUE, value);
     SetWindowTextW(settingsControls_.opacityEdit, std::to_wstring(value).c_str());
@@ -2148,7 +2162,7 @@ LRESULT Application::HandleSettingsMessage(HWND window, UINT message, WPARAM wPa
         }
         if (id == SettingsAbout) {
             MessageBoxW(window,
-                L"小窗浏览器 v1.4.4\n\n"
+                L"小窗浏览器 v1.4.5-test.2\n\n"
                 L"专为单屏玩家打造的 Windows 画中画浏览器\n"
                 L"C++20 / Win32 / WebView2 1.0.4078.44\n\n"
                 L"https://github.com/azurplain/Mini-Window-Browser",
@@ -2541,6 +2555,7 @@ void Application::ResetToDefaults() {
     inputGuard_.SetEnabled(state_.settings.disableHotkeysOnTyping);
     RECT rect{100, 100, 1100, 700};
     windowModes_.ApplyPresetGeometry(rect, false);
+    windowModes_.RefreshVisualState();
     RefreshTrayMode(); RefreshHotkeys(); RefreshSettingsControls(); SaveConfiguration();
 }
 
@@ -2625,6 +2640,7 @@ void Application::ApplyPreset(const Preset& preset) {
     const ThemeMode retainedTheme = state_.settings.themeMode;
     const RenderMode retainedRender = state_.settings.renderMode;
     state_.settings.holeRadius = preset.holeRadius;
+    state_.settings.holeRefreshMs = preset.holeRefreshMs;
     state_.settings.snapThreshold = preset.snapThreshold;
     state_.settings.holeOpacityPercent = preset.holeOpacityPercent;
     state_.settings.autoHideOpacityPercent = preset.autoHideOpacityPercent;
@@ -2646,6 +2662,7 @@ void Application::ApplyPreset(const Preset& preset) {
     state_.hotkeys = preset.hotkeys;
     webZoom_.Configure(state_.settings);
     windowModes_.ApplyPresetGeometry(preset.normalRect, preset.maximized);
+    windowModes_.RefreshVisualState();
     if (!preset.tabs.empty()) {
         state_.tabs = preset.tabs;
         for (TabData& tab : state_.tabs) {
@@ -2669,6 +2686,7 @@ Preset Application::CapturePreset(const std::wstring& name) const {
     preset.normalRect = windowModes_.NormalRect();
     preset.maximized = windowModes_.IsSeamlessMaximized();
     preset.holeRadius = state_.settings.holeRadius;
+    preset.holeRefreshMs = state_.settings.holeRefreshMs;
     preset.snapThreshold = state_.settings.snapThreshold;
     preset.holeOpacityPercent = state_.settings.holeOpacityPercent;
     preset.autoHideOpacityPercent = state_.settings.autoHideOpacityPercent;
