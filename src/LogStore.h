@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -88,7 +90,7 @@ private:
                 if (!entry.is_regular_file(error) || error) { error.clear(); continue; }
                 const auto name = entry.path().filename().wstring();
                 // Only own daily log files, never user-provided files.
-                if (name.size() != 24 || name.compare(0, 11, L"XiaoChuang-") != 0 ||
+                if (name.size() != 25 || name.compare(0, 11, L"XiaoChuang-") != 0 ||
                     name.compare(21, 4, L".log") != 0) continue;
                 const auto modified = entry.last_write_time(error);
                 if (error) { error.clear(); continue; }
