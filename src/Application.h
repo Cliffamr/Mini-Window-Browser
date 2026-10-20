@@ -59,6 +59,7 @@ private:
         SettingsFixedZoom = 2020,
         SettingsZoomPercent = 2021,
         SettingsHoleRefresh = 2022,
+        SettingsBlankPageCheck = 2023,
         SettingsHotkeyBase = 2100,
         SettingsHotkeyEnabledBase = 2200,
 
@@ -276,6 +277,7 @@ private:
     struct SettingsControls {
         HWND radius = nullptr;
         HWND holeRefresh = nullptr;
+        HWND blankPageCheck = nullptr;
         HWND snap = nullptr;
         HWND style = nullptr;
         HWND opacitySlider = nullptr;
