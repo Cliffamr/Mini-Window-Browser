@@ -614,7 +614,12 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
         else if (wParam == kInputFallbackTimerId) {
             const ULONGLONG now = GetTickCount64();
             if (lastHeartbeatTick_ != 0) {
-                maximumHeartbeatDelay_ = std::max(maximumHeartbeatDelay_, now - lastHeartbeatTick_);
+                const ULONGLONG gap = now - lastHeartbeatTick_;
+                maximumHeartbeatDelay_ = std::max(maximumHeartbeatDelay_, gap);
+                if (gap > 3000) {
+                    logs_.Write("ui.heartbeat_gap",
+                        "elapsed_ms=" + std::to_string(gap));
+                }
             }
             lastHeartbeatTick_ = now;
             inputGuard_.Refresh();
