@@ -120,7 +120,7 @@ void TestConfigMigration() {
     xiaochuang::Preset preset;
     preset.name = L"三标签";
     preset.tabs = {{L"哔哩哔哩", L"https://www.bilibili.com"},
-                   {L"抖音", L"https://www.douyin.com"},
+                   {L"Douyin", L"https://www.douyin.com"},
                    {L"YouTube", L"https://www.youtube.com"}};
     preset.activeTab = 1;
     preset.currentUrl = preset.tabs[1].url;
@@ -137,7 +137,7 @@ void TestConfigMigration() {
     Check(presetReloaded.presets.size() == 1 && presetReloaded.presets[0].tabs.size() == 3,
           L"预设完整保存全部标签页");
     Check(presetReloaded.presets[0].activeTab == 1 &&
-          presetReloaded.presets[0].tabs[1].title == L"抖音",
+          presetReloaded.presets[0].tabs[1].title == L"Douyin",
           L"预设保存当前标签索引和标题");
     Check(presetReloaded.presets[0].autoFitVideoFullscreen &&
           presetReloaded.presets[0].lockVideoFullscreenAspect &&
