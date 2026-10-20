@@ -75,7 +75,7 @@
 </tr>
 </table>
 
-## v1.4.5-test.2 测试版：日志、挖孔刷新与导航恢复
+## v1.4.5 正式版：日志、挖孔刷新与导航恢复
 
 - 设置中的“复制诊断信息”替换为“打开日志文件夹”；日志与 `config.ini` 同级存放在 `logs/`，按日期保存 WebView2 生命周期、标签导航、异常检测与重建事件，不记录网址、网页标题、输入内容或 Cookie。
 - **自动清理日志**默认开启、保留 **7天**，可关闭或选 **3/7/30天**，只清理软件自己的超期日志；该选项属于全局设置，不随场景预设变更。
@@ -122,7 +122,7 @@
 
 ### 下载与运行
 
-1. 在 [Releases](https://github.com/azurplain/Mini-Window-Browser/releases/latest) 下载 `Mini-Window-Browser-v1.4.4-x64.zip`。
+1. 在 [Releases](https://github.com/azurplain/Mini-Window-Browser/releases/latest) 下载 `Mini-Window-Browser-v1.4.5-x64.zip`。
 2. 将压缩包完整解压到普通可写目录，不要只从压缩包内直接运行 EXE。
 3. 保持 `XiaoChuang.exe` 与 `WebView2Loader.dll` 位于同一目录。
 4. 双击 `XiaoChuang.exe`，在 Windows UAC 窗口中选择“是”。
