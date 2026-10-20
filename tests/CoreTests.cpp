@@ -44,6 +44,7 @@ void TestConfigMigration() {
     Check(store.Load(state), L"旧配置可加载");
     Check(state.settings.holeRadius == 0, L"挖孔半径范围校验");
     Check(state.settings.holeRefreshMs == 16, L"旧配置挖孔刷新默认16ms");
+    Check(state.settings.blankPageCheckSeconds == 5, L"旧配置白屏检测等待默认5秒");
     Check(state.settings.snapThreshold == 200, L"吸附距离范围校验");
     Check(state.settings.holdPlaybackRate == 5, L"长按倍速范围校验");
     Check(state.settings.holeOpacityPercent == 100 &&
@@ -73,6 +74,7 @@ void TestConfigMigration() {
     reloaded.settings.fixedWebZoomEnabled = true;
     reloaded.settings.fixedWebZoomPercent = 135;
     reloaded.settings.holeRefreshMs = 33;
+    reloaded.settings.blankPageCheckSeconds = 12;
     Check(store.Save(reloaded, rect, false), L"最大化顶部拖动配置可保存");
     xiaochuang::AppState dragSettingReloaded;
     Check(store.Load(dragSettingReloaded) && dragSettingReloaded.settings.maximizedTopDragEnabled,
@@ -83,6 +85,8 @@ void TestConfigMigration() {
     Check(dragSettingReloaded.settings.fixedWebZoomEnabled &&
           dragSettingReloaded.settings.fixedWebZoomPercent == 135, L"固定网页缩放配置往返一致");
     Check(dragSettingReloaded.settings.holeRefreshMs == 33, L"挖孔刷新间隔配置往返一致");
+    Check(dragSettingReloaded.settings.blankPageCheckSeconds == 12,
+          L"白屏检测等待秒数配置往返一致");
     WritePrivateProfileStringW(L"Settings", L"HoleRefreshMs", L"1", path.c_str());
     xiaochuang::AppState holeRange;
     store.Load(holeRange);
@@ -90,6 +94,13 @@ void TestConfigMigration() {
     WritePrivateProfileStringW(L"Settings", L"HoleRefreshMs", L"200", path.c_str());
     store.Load(holeRange);
     Check(holeRange.settings.holeRefreshMs == 100, L"挖孔刷新间隔上限校验");
+    WritePrivateProfileStringW(L"Settings", L"BlankPageCheckSeconds", L"0", path.c_str());
+    xiaochuang::AppState checkRange;
+    store.Load(checkRange);
+    Check(checkRange.settings.blankPageCheckSeconds == 3, L"白屏检测等待下限");
+    WritePrivateProfileStringW(L"Settings", L"BlankPageCheckSeconds", L"100", path.c_str());
+    store.Load(checkRange);
+    Check(checkRange.settings.blankPageCheckSeconds == 30, L"白屏检测等待上限");
     WritePrivateProfileStringW(L"Settings", L"FixedWebZoomPercent", L"0", path.c_str());
     xiaochuang::AppState zoomRange;
     store.Load(zoomRange);
@@ -140,6 +151,7 @@ void TestConfigMigration() {
     preset.fixedWebZoomEnabled = true;
     preset.fixedWebZoomPercent = 80;
     preset.holeRefreshMs = 48;
+    preset.blankPageCheckSeconds = 15;
     preset.hotkeys[xiaochuang::HotkeyIndex(xiaochuang::HotkeyAction::Next)].enabled = false;
     reloaded.presets = {preset};
     Check(store.Save(reloaded, rect, false), L"多标签预设可保存");
@@ -160,6 +172,10 @@ void TestConfigMigration() {
     Check(presetReloaded.presets[0].fixedWebZoomEnabled &&
           presetReloaded.presets[0].fixedWebZoomPercent == 80, L"预设独立保存网页缩放");
     Check(presetReloaded.presets[0].holeRefreshMs == 48, L"预设独立保存挖孔刷新间隔");
+    Check(presetReloaded.presets[0].blankPageCheckSeconds == 15,
+          L"预设独立保存白屏检测等待秒数");
+    Check(presetReloaded.settings.blankPageCheckSeconds == 12,
+          L"读取预设不能覆盖当前全局白屏检测等待设置");
 
     WritePrivateProfileSectionW(L"Presets", nullptr, path.c_str());
     WritePrivateProfileStringW(L"Presets", L"Count", L"1", path.c_str());
@@ -179,6 +195,8 @@ void TestConfigMigration() {
     Check(!legacyPresetState.presets[0].fixedWebZoomEnabled &&
           legacyPresetState.presets[0].fixedWebZoomPercent == 100, L"旧版预设缩放默认兼容");
     Check(legacyPresetState.presets[0].holeRefreshMs == 16, L"旧版预设挖孔刷新默认兼容");
+    Check(legacyPresetState.presets[0].blankPageCheckSeconds == 5,
+          L"旧版预设白屏检测等待默认5秒");
     DeleteFileW(path.c_str());
 }
 
