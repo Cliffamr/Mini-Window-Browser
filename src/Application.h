@@ -58,6 +58,7 @@ private:
         SettingsLockFullscreenAspect = 2019,
         SettingsFixedZoom = 2020,
         SettingsZoomPercent = 2021,
+        SettingsHoleRefresh = 2022,
         SettingsHotkeyBase = 2100,
         SettingsHotkeyEnabledBase = 2200,
 
@@ -93,6 +94,7 @@ private:
     static constexpr UINT_PTR kSettingsSaveTimerId = 4404;
     static constexpr UINT_PTR kInputDebounceTimerId = 4405;
     static constexpr UINT_PTR kContentWaitTimerId = 4406;
+    static constexpr UINT_PTR kContentProbeTimerId = 4408;
     static constexpr UINT_PTR kHotkeyRegistrationRetryTimerId = 4407;
     static constexpr int kTrayIconId = 1;
 
@@ -270,6 +272,7 @@ private:
 
     struct SettingsControls {
         HWND radius = nullptr;
+        HWND holeRefresh = nullptr;
         HWND snap = nullptr;
         HWND style = nullptr;
         HWND opacitySlider = nullptr;
@@ -302,6 +305,8 @@ private:
 #endif
     bool updatingSettingsControls_ = false;
     bool waitingForTabContent_ = false;
+    bool contentProbePending_ = false;
+    ULONGLONG lastContentRecoveryTick_ = 0;
     UINT64 waitingNavigationId_ = 0;
     ULONGLONG contentWaitStartedAt_ = 0;
     int settingsScrollPosition_ = 0;
