@@ -1539,7 +1539,8 @@ void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) 
                 ExecuteScript(L"if(document.fullscreenElement) document.exitFullscreen();");
                 windowModes_.LeaveWebFullscreen();
             }
-            webView_->Stop();
+            // Navigate replaces the pending navigation itself. Calling Stop first can
+            // race its completion events against the new tab's navigation.
             BeginContentWait();
         }
         const HRESULT result = webView_->Navigate(normalized.c_str());
@@ -1554,8 +1555,10 @@ void Application::BeginContentWait() {
     waitingForTabContent_ = true;
     waitingNavigationId_ = 0;
     contentWaitStartedAt_ = GetTickCount64();
-    if (webViewController_) webViewController_->put_IsVisible(FALSE);
-    SetTimer(mainWindow_, kContentWaitTimerId, 15000, nullptr);
+    // Never conceal the shared WebView while navigating. A delayed/missing
+    // ContentLoading event previously left the whole content area blank and
+    // non-interactive until the watchdog elapsed.
+    SetTimer(mainWindow_, kContentWaitTimerId, 5000, nullptr);
     InvalidateRect(mainWindow_, nullptr, TRUE);
 }
 
@@ -1565,7 +1568,10 @@ void Application::EndContentWait() {
     waitingForTabContent_ = false;
     waitingNavigationId_ = 0;
     contentWaitStartedAt_ = 0;
-    if (webViewController_ && !windowModes_.IsHidden()) webViewController_->put_IsVisible(TRUE);
+    if (webViewController_) {
+        const BOOL render = !windowModes_.IsHidden() || state_.settings.backgroundMediaHotkeys;
+        webViewController_->put_IsVisible(render);
+    }
     if (wasWaiting && mainWindow_) InvalidateRect(mainWindow_, nullptr, FALSE);
 }
 
@@ -1580,14 +1586,14 @@ void Application::SetHidden(bool hidden) {
     }
     if (webViewController_) {
         const BOOL render = !hidden || state_.settings.backgroundMediaHotkeys;
-        webViewController_->put_IsVisible(render && !waitingForTabContent_);
+        webViewController_->put_IsVisible(render);
     }
     windowModes_.SetHidden(hidden);
     state_.windowHidden = hidden;
     if (!hidden) {
         ResizeWebView();
         if (webViewController_) {
-            webViewController_->put_IsVisible(waitingForTabContent_ ? FALSE : TRUE);
+            webViewController_->put_IsVisible(TRUE);
             webViewController_->NotifyParentWindowPositionChanged();
         }
         RedrawWindow(mainWindow_, nullptr, nullptr,
