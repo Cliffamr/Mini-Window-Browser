@@ -619,8 +619,8 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
             if (foregroundChanged) windowModes_.ReassertTopmost();
         }
         else if (wParam == kContentWaitTimerId) {
-            // This is only a 5s UI loading-indicator timeout, not a reload.
-            // A separate timer probes the shared renderer even when
+            // This is only a configurable UI loading-indicator timeout,
+            // not an automatic reload. A separate timer probes even when
             // ContentLoading arrived, because rendering can still be stuck.
             const bool timedOut = waitingForTabContent_;
             EndContentWait();
@@ -1609,9 +1609,10 @@ void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) 
             // Navigate replaces the pending navigation itself. Calling Stop first can
             // race its completion events against the new tab's navigation.
             BeginContentWait();
-            // Check after the new navigation has had 5s to load, even when
-            // ContentLoading or NavigationCompleted fired normally.
-            SetTimer(mainWindow_, kContentHealthTimerId, 5000, nullptr);
+            // Check this navigation once after the configurable delay, even
+            // when ContentLoading or NavigationCompleted fired normally.
+            const UINT delayMs = static_cast<UINT>(state_.settings.blankPageCheckSeconds * 1000);
+            SetTimer(mainWindow_, kContentHealthTimerId, delayMs, nullptr);
         }
         const HRESULT result = webView_->Navigate(normalized.c_str());
         if (FAILED(result)) {
@@ -1625,10 +1626,10 @@ void Application::BeginContentWait() {
     waitingForTabContent_ = true;
     waitingNavigationId_ = 0;
     contentWaitStartedAt_ = GetTickCount64();
-    // Never conceal the shared WebView while navigating. A delayed/missing
-    // ContentLoading event previously left the whole content area blank and
-    // non-interactive until the watchdog elapsed.
-    SetTimer(mainWindow_, kContentWaitTimerId, 5000, nullptr);
+    // Never conceal the shared WebView while navigating. The user-configured
+    // one-shot timeout only clears the loading indicator, not the page.
+    const UINT delayMs = static_cast<UINT>(state_.settings.blankPageCheckSeconds * 1000);
+    SetTimer(mainWindow_, kContentWaitTimerId, delayMs, nullptr);
     InvalidateRect(mainWindow_, nullptr, TRUE);
 }
 
@@ -1906,6 +1907,19 @@ void Application::CreateSettingsControls(HWND window) {
     HWND zoomRefreshNote = CreateLabel(window, L"取消固定后，刷新网页恢复手动缩放；不会自动刷新以免打断播放。");
     MoveWindow(zoomRefreshNote, left, y, Scale(650), Scale(28), FALSE);
     y += Scale(32);
+    // This adjusts when a *one-shot* white-screen health check starts.
+    // The check never blindly refreshes a slowly loading page.
+    label(L"白屏检测等待", y);
+    settingsControls_.blankPageCheck = edit(SettingsBlankPageCheck, y, Scale(90));
+    SendMessageW(settingsControls_.blankPageCheck, EM_SETLIMITTEXT, 2, 0);
+    HWND blankCheckUnit = CreateLabel(window, L"秒");
+    MoveWindow(blankCheckUnit, fieldX + Scale(102), y + Scale(4),
+               Scale(42), Scale(24), FALSE);
+    y += row;
+    HWND blankCheckNote = CreateLabel(window,
+        L"3–30秒，默认5秒。仅检测网页响应，异常时尝试恢复，不会定时刷新。");
+    MoveWindow(blankCheckNote, left, y, Scale(650), Scale(28), FALSE);
+    y += Scale(34);
     settingsControls_.autoFitFullscreen = checkbox(
         L"网页视频全屏时自动按画面比例调整小窗大小", SettingsAutoFitFullscreen, y);
     y += Scale(30);
@@ -2025,6 +2039,8 @@ void Application::ReadSettingsControls() {
     AppSettings old = state_.settings;
     state_.settings.holeRadius = ParseInteger(settingsControls_.radius, old.holeRadius);
     state_.settings.holeRefreshMs = ParseInteger(settingsControls_.holeRefresh, old.holeRefreshMs);
+    state_.settings.blankPageCheckSeconds = ParseInteger(
+        settingsControls_.blankPageCheck, old.blankPageCheckSeconds);
     state_.settings.snapThreshold = ParseInteger(settingsControls_.snap, old.snapThreshold);
     state_.settings.autoPauseOnHide = IsChecked(settingsControls_.autoPause);
     state_.settings.fixedWebZoomEnabled = IsChecked(settingsControls_.fixedZoom);
@@ -2047,6 +2063,8 @@ void Application::ReadSettingsControls() {
     state_.settings.Clamp();
     SetWindowTextW(settingsControls_.holeRefresh,
                    std::to_wstring(state_.settings.holeRefreshMs).c_str());
+    SetWindowTextW(settingsControls_.blankPageCheck,
+                   std::to_wstring(state_.settings.blankPageCheckSeconds).c_str());
     EnableWindow(settingsControls_.zoomPercent, state_.settings.fixedWebZoomEnabled ? TRUE : FALSE);
     SetWindowTextW(settingsControls_.zoomPercent,
         std::to_wstring(state_.settings.fixedWebZoomPercent).c_str());
@@ -2090,6 +2108,8 @@ void Application::RefreshSettingsControls() {
     SetWindowTextW(settingsControls_.radius, std::to_wstring(state_.settings.holeRadius).c_str());
     SetWindowTextW(settingsControls_.holeRefresh,
                    std::to_wstring(state_.settings.holeRefreshMs).c_str());
+    SetWindowTextW(settingsControls_.blankPageCheck,
+                   std::to_wstring(state_.settings.blankPageCheckSeconds).c_str());
     SetWindowTextW(settingsControls_.snap, std::to_wstring(state_.settings.snapThreshold).c_str());
     SetWindowTextW(settingsControls_.home, state_.settings.homeUrl.c_str());
     SetCheck(settingsControls_.autoPause, state_.settings.autoPauseOnHide);
@@ -2720,6 +2740,7 @@ void Application::ApplyPreset(const Preset& preset) {
     const RenderMode retainedRender = state_.settings.renderMode;
     state_.settings.holeRadius = preset.holeRadius;
     state_.settings.holeRefreshMs = preset.holeRefreshMs;
+    state_.settings.blankPageCheckSeconds = preset.blankPageCheckSeconds;
     state_.settings.snapThreshold = preset.snapThreshold;
     state_.settings.holeOpacityPercent = preset.holeOpacityPercent;
     state_.settings.autoHideOpacityPercent = preset.autoHideOpacityPercent;
@@ -2766,6 +2787,7 @@ Preset Application::CapturePreset(const std::wstring& name) const {
     preset.maximized = windowModes_.IsSeamlessMaximized();
     preset.holeRadius = state_.settings.holeRadius;
     preset.holeRefreshMs = state_.settings.holeRefreshMs;
+    preset.blankPageCheckSeconds = state_.settings.blankPageCheckSeconds;
     preset.snapThreshold = state_.settings.snapThreshold;
     preset.holeOpacityPercent = state_.settings.holeOpacityPercent;
     preset.autoHideOpacityPercent = state_.settings.autoHideOpacityPercent;
