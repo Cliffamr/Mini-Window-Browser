@@ -72,6 +72,7 @@ inline std::array<HotkeyBinding, kHotkeyCount> DefaultHotkeys() {
 
 struct AppSettings {
     int holeRadius = 400;
+    int holeRefreshMs = 16;
     int snapThreshold = 20;
     int holeOpacityPercent = 100;
     int autoHideOpacityPercent = 100;
@@ -92,6 +93,7 @@ struct AppSettings {
 
     void Clamp() {
         holeRadius = std::clamp(holeRadius, 0, 4000);
+        holeRefreshMs = std::clamp(holeRefreshMs, 10, 100);
         snapThreshold = std::clamp(snapThreshold, 0, 200);
         holeOpacityPercent = std::clamp(holeOpacityPercent, 0, 100);
         autoHideOpacityPercent = std::clamp(autoHideOpacityPercent, 0, 100);
@@ -118,6 +120,7 @@ struct Preset {
     RECT normalRect{100, 100, 1100, 700};
     bool maximized = false;
     int holeRadius = 400;
+    int holeRefreshMs = 16;
     int snapThreshold = 20;
     int holeOpacityPercent = 100;
     int autoHideOpacityPercent = 100;
