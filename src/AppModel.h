@@ -72,6 +72,8 @@ inline std::array<HotkeyBinding, kHotkeyCount> DefaultHotkeys() {
 
 struct AppSettings {
     int holeRadius = 400;
+    int holeRefreshMs = 16;
+    int blankPageCheckSeconds = 5;
     int snapThreshold = 20;
     int holeOpacityPercent = 100;
     int autoHideOpacityPercent = 100;
@@ -88,10 +90,17 @@ struct AppSettings {
     ImmersionStyle immersionStyle = ImmersionStyle::Hole;
     RenderMode renderMode = RenderMode::AutomaticGpu;
     ThemeMode themeMode = ThemeMode::System;
+    // Global housekeeping: intentionally not stored in scene presets.
+    bool autoCleanLogs = true;
+    int logRetentionDays = 7;
     std::wstring homeUrl = L"https://www.bilibili.com";
 
     void Clamp() {
         holeRadius = std::clamp(holeRadius, 0, 4000);
+        holeRefreshMs = std::clamp(holeRefreshMs, 10, 100);
+        blankPageCheckSeconds = std::clamp(blankPageCheckSeconds, 3, 30);
+        if (logRetentionDays != 3 && logRetentionDays != 7 && logRetentionDays != 30)
+            logRetentionDays = 7;
         snapThreshold = std::clamp(snapThreshold, 0, 200);
         holeOpacityPercent = std::clamp(holeOpacityPercent, 0, 100);
         autoHideOpacityPercent = std::clamp(autoHideOpacityPercent, 0, 100);
@@ -118,6 +127,8 @@ struct Preset {
     RECT normalRect{100, 100, 1100, 700};
     bool maximized = false;
     int holeRadius = 400;
+    int holeRefreshMs = 16;
+    int blankPageCheckSeconds = 5;
     int snapThreshold = 20;
     int holeOpacityPercent = 100;
     int autoHideOpacityPercent = 100;

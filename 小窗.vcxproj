@@ -158,6 +158,7 @@
     <ClInclude Include="src\Diagnostics.h" />
     <ClInclude Include="src\HotkeyManager.h" />
     <ClInclude Include="src\InputGuard.h" />
+    <ClInclude Include="src\LogStore.h" />
     <ClInclude Include="src\MediaBridge.h" />
     <ClInclude Include="src\ThemeManager.h" />
     <ClInclude Include="src\WindowModeController.h" />

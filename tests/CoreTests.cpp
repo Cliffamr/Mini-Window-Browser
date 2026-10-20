@@ -2,11 +2,14 @@
 #include "../src/ConfigStore.h"
 #include "../src/CoreLogic.h"
 #include "../src/Diagnostics.h"
+#include "../src/LogStore.h"
 #include "../src/MediaBridge.h"
 
 #include <windows.h>
 
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -43,6 +46,10 @@ void TestConfigMigration() {
     const xiaochuang::ConfigStore store(path);
     Check(store.Load(state), L"旧配置可加载");
     Check(state.settings.holeRadius == 0, L"挖孔半径范围校验");
+    Check(state.settings.holeRefreshMs == 16, L"旧配置挖孔刷新默认16ms");
+    Check(state.settings.autoCleanLogs && state.settings.logRetentionDays == 7,
+          L"旧配置日志清理默认开启且保留7天");
+    Check(state.settings.blankPageCheckSeconds == 5, L"旧配置白屏检测等待默认5秒");
     Check(state.settings.snapThreshold == 200, L"吸附距离范围校验");
     Check(state.settings.holdPlaybackRate == 5, L"长按倍速范围校验");
     Check(state.settings.holeOpacityPercent == 100 &&
@@ -71,6 +78,10 @@ void TestConfigMigration() {
     reloaded.settings.maximizedTopDragEnabled = true;
     reloaded.settings.fixedWebZoomEnabled = true;
     reloaded.settings.fixedWebZoomPercent = 135;
+    reloaded.settings.holeRefreshMs = 33;
+    reloaded.settings.autoCleanLogs = false;
+    reloaded.settings.logRetentionDays = 30;
+    reloaded.settings.blankPageCheckSeconds = 12;
     Check(store.Save(reloaded, rect, false), L"最大化顶部拖动配置可保存");
     xiaochuang::AppState dragSettingReloaded;
     Check(store.Load(dragSettingReloaded) && dragSettingReloaded.settings.maximizedTopDragEnabled,
@@ -80,6 +91,34 @@ void TestConfigMigration() {
           L"网页全屏自动适配与比例锁定配置往返一致");
     Check(dragSettingReloaded.settings.fixedWebZoomEnabled &&
           dragSettingReloaded.settings.fixedWebZoomPercent == 135, L"固定网页缩放配置往返一致");
+    Check(dragSettingReloaded.settings.holeRefreshMs == 33, L"挖孔刷新间隔配置往返一致");
+    Check(!dragSettingReloaded.settings.autoCleanLogs &&
+          dragSettingReloaded.settings.logRetentionDays == 30,
+          L"日志自动清理和30天保留配置往返一致");
+    Check(dragSettingReloaded.settings.blankPageCheckSeconds == 12,
+          L"白屏检测等待秒数配置往返一致");
+    WritePrivateProfileStringW(L"Settings", L"HoleRefreshMs", L"1", path.c_str());
+    xiaochuang::AppState holeRange;
+    store.Load(holeRange);
+    Check(holeRange.settings.holeRefreshMs == 10, L"挖孔刷新间隔下限校验");
+    WritePrivateProfileStringW(L"Settings", L"HoleRefreshMs", L"200", path.c_str());
+    store.Load(holeRange);
+    Check(holeRange.settings.holeRefreshMs == 100, L"挖孔刷新间隔上限校验");
+    WritePrivateProfileStringW(L"Settings", L"LogRetentionDays", L"999", path.c_str());
+    xiaochuang::AppState logRange;
+    store.Load(logRange);
+    Check(logRange.settings.logRetentionDays == 7, L"非法日志保留时间恢复7天");
+    WritePrivateProfileStringW(L"Settings", L"LogRetentionDays", L"30", path.c_str());
+    store.Load(logRange);
+    Check(!logRange.settings.autoCleanLogs && logRange.settings.logRetentionDays == 30,
+          L"关闭自动清理后保留用户选择");
+    WritePrivateProfileStringW(L"Settings", L"BlankPageCheckSeconds", L"0", path.c_str());
+    xiaochuang::AppState checkRange;
+    store.Load(checkRange);
+    Check(checkRange.settings.blankPageCheckSeconds == 3, L"白屏检测等待下限");
+    WritePrivateProfileStringW(L"Settings", L"BlankPageCheckSeconds", L"100", path.c_str());
+    store.Load(checkRange);
+    Check(checkRange.settings.blankPageCheckSeconds == 30, L"白屏检测等待上限");
     WritePrivateProfileStringW(L"Settings", L"FixedWebZoomPercent", L"0", path.c_str());
     xiaochuang::AppState zoomRange;
     store.Load(zoomRange);
@@ -120,7 +159,7 @@ void TestConfigMigration() {
     xiaochuang::Preset preset;
     preset.name = L"三标签";
     preset.tabs = {{L"哔哩哔哩", L"https://www.bilibili.com"},
-                   {L"抖音", L"https://www.douyin.com"},
+                   {L"Douyin", L"https://www.douyin.com"},
                    {L"YouTube", L"https://www.youtube.com"}};
     preset.activeTab = 1;
     preset.currentUrl = preset.tabs[1].url;
@@ -129,6 +168,8 @@ void TestConfigMigration() {
     preset.maximizedTopDragEnabled = true;
     preset.fixedWebZoomEnabled = true;
     preset.fixedWebZoomPercent = 80;
+    preset.holeRefreshMs = 48;
+    preset.blankPageCheckSeconds = 15;
     preset.hotkeys[xiaochuang::HotkeyIndex(xiaochuang::HotkeyAction::Next)].enabled = false;
     reloaded.presets = {preset};
     Check(store.Save(reloaded, rect, false), L"多标签预设可保存");
@@ -137,7 +178,7 @@ void TestConfigMigration() {
     Check(presetReloaded.presets.size() == 1 && presetReloaded.presets[0].tabs.size() == 3,
           L"预设完整保存全部标签页");
     Check(presetReloaded.presets[0].activeTab == 1 &&
-          presetReloaded.presets[0].tabs[1].title == L"抖音",
+          presetReloaded.presets[0].tabs[1].title == L"Douyin",
           L"预设保存当前标签索引和标题");
     Check(presetReloaded.presets[0].autoFitVideoFullscreen &&
           presetReloaded.presets[0].lockVideoFullscreenAspect &&
@@ -148,6 +189,14 @@ void TestConfigMigration() {
           L"预设保存逐项快捷键启用状态");
     Check(presetReloaded.presets[0].fixedWebZoomEnabled &&
           presetReloaded.presets[0].fixedWebZoomPercent == 80, L"预设独立保存网页缩放");
+    Check(presetReloaded.presets[0].holeRefreshMs == 48, L"预设独立保存挖孔刷新间隔");
+    Check(presetReloaded.presets[0].blankPageCheckSeconds == 15,
+          L"预设独立保存白屏检测等待秒数");
+    Check(!presetReloaded.settings.autoCleanLogs &&
+          presetReloaded.settings.logRetentionDays == 30,
+          L"场景预设不会覆盖全局日志保留策略");
+    Check(presetReloaded.settings.blankPageCheckSeconds == 12,
+          L"读取预设不能覆盖当前全局白屏检测等待设置");
 
     WritePrivateProfileSectionW(L"Presets", nullptr, path.c_str());
     WritePrivateProfileStringW(L"Presets", L"Count", L"1", path.c_str());
@@ -166,6 +215,9 @@ void TestConfigMigration() {
           L"旧版预设热键不继承当前全局停用状态");
     Check(!legacyPresetState.presets[0].fixedWebZoomEnabled &&
           legacyPresetState.presets[0].fixedWebZoomPercent == 100, L"旧版预设缩放默认兼容");
+    Check(legacyPresetState.presets[0].holeRefreshMs == 16, L"旧版预设挖孔刷新默认兼容");
+    Check(legacyPresetState.presets[0].blankPageCheckSeconds == 5,
+          L"旧版预设白屏检测等待默认5秒");
     DeleteFileW(path.c_str());
 }
 
@@ -356,6 +408,62 @@ void TestWindowGeometryHelpers() {
           L"普通位置进入沉浸仍保持网页内容的屏幕位置");
 }
 
+void TestLogStore() {
+    namespace fs = std::filesystem;
+    wchar_t tempDirectory[MAX_PATH]{};
+    GetTempPathW(static_cast<DWORD>(std::size(tempDirectory)), tempDirectory);
+    const fs::path root = fs::path(tempDirectory) /
+        (L"XiaoChuang-LogTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code error;
+    fs::remove_all(root, error);
+    fs::create_directories(root, error);
+    xiaochuang::LogStore logger(root / L"config.ini");
+    Check(logger.EnsureDirectory() && fs::exists(root / L"logs"),
+          L"日志目录与config.ini同级创建");
+
+    auto seed = [&](const wchar_t* name, int ageDays) {
+        const auto path = logger.Directory() / name;
+        { std::ofstream output(path, std::ios::binary); output << "old event"; }
+        std::error_code ec;
+        fs::last_write_time(path,
+            fs::file_time_type::clock::now() - std::chrono::hours(24 * ageDays), ec);
+        return !ec;
+    };
+    Check(seed(L"XiaoChuang-1999-01-01.log", 5) &&
+          seed(L"XiaoChuang-1999-01-02.log", 15) &&
+          seed(L"XiaoChuang-1999-01-03.log", 40) &&
+          seed(L"keep-user-file.txt", 90), L"创建日志清理样本");
+    logger.SetRetention(false, 3);
+    Check(fs::exists(logger.Directory() / L"XiaoChuang-1999-01-03.log"),
+          L"关闭自动清理时不删除旧日志");
+    logger.SetRetention(true, 30);
+    Check(!fs::exists(logger.Directory() / L"XiaoChuang-1999-01-03.log") &&
+          fs::exists(logger.Directory() / L"XiaoChuang-1999-01-02.log"),
+          L"30天自动清理只删除超过保留期的日志");
+    logger.SetRetention(true, 7);
+    Check(!fs::exists(logger.Directory() / L"XiaoChuang-1999-01-02.log") &&
+          fs::exists(logger.Directory() / L"XiaoChuang-1999-01-01.log"),
+          L"7天自动清理生效");
+    logger.SetRetention(true, 3);
+    Check(!fs::exists(logger.Directory() / L"XiaoChuang-1999-01-01.log"),
+          L"3天自动清理生效");
+    Check(fs::exists(logger.Directory() / L"keep-user-file.txt"),
+          L"日志清理不会删除用户其他文件");
+    logger.Write("webview.probe.timeout", "generation=3 serial=2");
+    bool hasLog = false;
+    for (const auto& entry : fs::directory_iterator(logger.Directory())) {
+        if (entry.path().extension() != L".log") continue;
+        std::ifstream input(entry.path(), std::ios::binary);
+        const std::string data((std::istreambuf_iterator<char>(input)),
+                               std::istreambuf_iterator<char>());
+        if (data.find("webview.probe.timeout") != std::string::npos &&
+            data.find("generation=3 serial=2") != std::string::npos) hasLog = true;
+    }
+    Check(hasLog, L"按天生成含时间和数值事件的日志");
+    fs::remove_all(root, error);
+    Check(!fs::exists(root), L"日志测试文件夹可清理");
+}
+
 void TestScriptResultDecoding() {
     using namespace xiaochuang;
     Check(DecodeExecuteScriptString(L"\"hello\\nworld\"") == L"hello\nworld",
@@ -370,6 +478,7 @@ void TestScriptResultDecoding() {
 
 int wmain() {
     TestConfigMigration();
+    TestLogStore();
     TestWindowTransitions();
     TestHoldGestures();
     TestInputAndMediaSelection();

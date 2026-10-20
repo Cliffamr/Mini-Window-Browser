@@ -131,6 +131,7 @@ const wchar_t* MediaBridge::BootstrapScript() {
     state.hold = null;
   };
 
+)MWBJS" L"\n" LR"MWBJS(
   const handlePreviousNext = (direction) => {
     const currentSite = site();
     if (currentSite === 'youtube') {

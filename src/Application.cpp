@@ -51,6 +51,7 @@ constexpr wchar_t kSingleInstanceName[] = L"MiniWindowBrowser-v1.4-SingleInstanc
 constexpr UINT kCloseCurrentTabCommand = 51001;
 constexpr UINT kCloseOtherTabsCommand = 51002;
 constexpr UINT kCloseAllTabsCommand = 51003;
+constexpr UINT kRepairWebViewCommand = 51004;
 
 std::wstring WindowText(HWND window) {
     const int length = GetWindowTextLengthW(window);
@@ -161,6 +162,12 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
     }
 
     config_.Load(state_);
+    logs_.SetRetention(state_.settings.autoCleanLogs, state_.settings.logRetentionDays);
+    logs_.Write("application.start",
+        "tabs=" + std::to_string(state_.tabs.size()) +
+        " auto_cleanup=" + std::to_string(state_.settings.autoCleanLogs ? 1 : 0) +
+        " retention_days=" + std::to_string(state_.settings.logRetentionDays) +
+        " check_seconds=" + std::to_string(state_.settings.blankPageCheckSeconds));
     for (const TabData& tab : state_.tabs) {
         if (!tab.url.empty() && !IsPlaceholderTabTitle(tab.title)) {
             knownPageTitles_[NormalizeComparableUrl(tab.url)] = tab.title;
@@ -220,6 +227,7 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
 void Application::Shutdown() {
     if (shuttingDown_) return;
     SaveConfiguration();
+    logs_.Write("application.shutdown", "tabs=" + std::to_string(state_.tabs.size()));
     shuttingDown_ = true;
     hotkeys_.Stop();
     inputGuard_.Stop();
@@ -529,7 +537,7 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
             if (state_.settings.useSystemTray) SetHidden(true);
             return 0;
         }
-        if (!windowModes_.IsHidden() && !waitingForTabContent_ && webViewController_) {
+        if (!windowModes_.IsHidden() && webViewController_) {
             webViewController_->put_IsVisible(TRUE);
         }
         LayoutMainControls();
@@ -606,7 +614,12 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
         else if (wParam == kInputFallbackTimerId) {
             const ULONGLONG now = GetTickCount64();
             if (lastHeartbeatTick_ != 0) {
-                maximumHeartbeatDelay_ = std::max(maximumHeartbeatDelay_, now - lastHeartbeatTick_);
+                const ULONGLONG gap = now - lastHeartbeatTick_;
+                maximumHeartbeatDelay_ = std::max(maximumHeartbeatDelay_, gap);
+                if (gap > 3000) {
+                    logs_.Write("ui.heartbeat_gap",
+                        "elapsed_ms=" + std::to_string(gap));
+                }
             }
             lastHeartbeatTick_ = now;
             inputGuard_.Refresh();
@@ -618,11 +631,39 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
             if (foregroundChanged) windowModes_.ReassertTopmost();
         }
         else if (wParam == kContentWaitTimerId) {
+            // This is only a configurable UI loading-indicator timeout,
+            // not an automatic reload. A separate timer probes even when
+            // ContentLoading arrived, because rendering can still be stuck.
+            const bool timedOut = waitingForTabContent_;
+            if (timedOut) {
+                logs_.Write("navigation.wait_timeout",
+                    "generation=" + std::to_string(webViewGeneration_) +
+                    " elapsed_ms=" + std::to_string(GetTickCount64() - contentWaitStartedAt_) +
+                    " check_seconds=" + std::to_string(state_.settings.blankPageCheckSeconds));
+            }
             EndContentWait();
-            if (state_.currentTabIndex >= 0 &&
+            if (timedOut && state_.currentTabIndex >= 0 &&
                 state_.currentTabIndex < static_cast<int>(state_.tabs.size())) {
                 TabData& tab = state_.tabs[static_cast<size_t>(state_.currentTabIndex)];
                 if (IsPlaceholderTabTitle(tab.title)) UpdateCurrentTabTitle(SuggestedTitleForUrl(tab.url));
+            }
+        }
+        else if (wParam == kContentHealthTimerId) {
+            KillTimer(window, kContentHealthTimerId);
+            logs_.Write("navigation.health_check_due",
+                "generation=" + std::to_string(webViewGeneration_));
+            ProbeWebViewResponsiveness();
+        }
+        else if (wParam == kContentProbeTimerId) {
+            KillTimer(window, kContentProbeTimerId);
+            if (contentProbePending_ && !shuttingDown_ && !webViewRecoveryPending_) {
+                contentProbePending_ = false;
+                ++contentProbeSerial_;
+                lastContentRecoveryTick_ = GetTickCount64();
+                logs_.Write("webview.probe.timeout",
+                    "generation=" + std::to_string(webViewGeneration_) +
+                    " serial=" + std::to_string(contentProbeSerial_));
+                RequestWebViewRecovery();
             }
         }
         else if (wParam == kHotkeyRegistrationRetryTimerId) {
@@ -883,8 +924,12 @@ LRESULT CALLBACK Application::TabSubclassProc(HWND window, UINT message, WPARAM 
 void Application::InitializeWebView() {
     if (shuttingDown_) return;
     const UINT64 generation = ++webViewGeneration_;
+    logs_.Write("webview.environment.create_begin",
+        "generation=" + std::to_string(generation) +
+        " software=" + std::to_string(state_.settings.renderMode == RenderMode::SoftwareCompatibility ? 1 : 0));
     auto options = Make<CoreWebView2EnvironmentOptions>();
     if (!options) {
+        logs_.Write("webview.environment.options_failed");
         ShowError(L"WebView2 初始化失败", L"无法创建 WebView2 环境选项。");
         return;
     }
@@ -897,11 +942,15 @@ void Application::InitializeWebView() {
             [this, generation](HRESULT environmentResult, ICoreWebView2Environment* environment) -> HRESULT {
                 if (shuttingDown_ || generation != webViewGeneration_) return S_OK;
                 if (FAILED(environmentResult) || !environment) {
+                    logs_.Write("webview.environment.failed",
+                        "hr=" + std::to_string(static_cast<unsigned long>(environmentResult)));
                     ShowError(L"WebView2 初始化失败",
                               L"请安装或修复 Microsoft Edge WebView2 Runtime。", environmentResult);
                     return S_OK;
                 }
                 webViewEnvironment_ = environment;
+                logs_.Write("webview.environment.ready",
+                    "generation=" + std::to_string(generation));
                 wil::unique_cotaskmem_string version;
                 if (SUCCEEDED(environment->get_BrowserVersionString(&version)) && version) {
                     webViewVersion_ = version.get();
@@ -915,11 +964,16 @@ void Application::InitializeWebView() {
                                 return S_OK;
                             }
                             if (FAILED(controllerResult) || !controller) {
+                                logs_.Write("webview.controller.failed",
+                                    "hr=" + std::to_string(static_cast<unsigned long>(controllerResult)));
                                 ShowError(L"WebView2 初始化失败", L"无法创建网页视图。", controllerResult);
                                 return S_OK;
                             }
                             webViewController_ = controller;
+                            logs_.Write("webview.controller.ready",
+                                "generation=" + std::to_string(generation));
                             if (FAILED(controller->get_CoreWebView2(&webView_)) || !webView_) {
+                                logs_.Write("webview.interface.failed");
                                 ShowError(L"WebView2 初始化失败", L"无法取得网页视图接口。");
                                 return S_OK;
                             }
@@ -948,11 +1002,16 @@ void Application::InitializeWebView() {
                                         if (FAILED(result)) {
                                             ShowError(L"媒体控制初始化失败", L"网页仍可浏览，请重启小窗后重试。", result);
                                         }
+                                        logs_.Write("webview.bootstrap.done",
+                                            "generation=" + std::to_string(generation) +
+                                            " hr=" + std::to_string(static_cast<unsigned long>(result)));
                                         webViewReady_ = true;
                                         FinishInitialNavigation();
                                         return S_OK;
                                     }).Get());
                             if (FAILED(scriptResult)) {
+                                logs_.Write("webview.bootstrap.submit_failed",
+                                    "hr=" + std::to_string(static_cast<unsigned long>(scriptResult)));
                                 ShowError(L"媒体控制初始化失败", L"网页仍可浏览，请重启小窗后重试。", scriptResult);
                                 webViewReady_ = true;
                                 FinishInitialNavigation();
@@ -960,11 +1019,15 @@ void Application::InitializeWebView() {
                             return S_OK;
                         }).Get());
                 if (FAILED(creationResult)) {
+                    logs_.Write("webview.controller.submit_failed",
+                        "hr=" + std::to_string(static_cast<unsigned long>(creationResult)));
                     ShowError(L"WebView2 初始化失败", L"无法创建网页视图。", creationResult);
                 }
                 return S_OK;
             }).Get());
     if (FAILED(result)) {
+        logs_.Write("webview.environment.submit_failed",
+            "hr=" + std::to_string(static_cast<unsigned long>(result)));
         ShowError(L"WebView2 初始化失败", L"无法启动 WebView2 环境。", result);
     }
 }
@@ -979,9 +1042,15 @@ void Application::ConfigureWebViewEvents() {
 #endif
                 hotkeys_.CancelActiveGesture();
                 inputGuard_.SetWebTyping(false);
-                if (waitingForTabContent_ && args) {
-                    args->get_NavigationId(&waitingNavigationId_);
+                UINT64 navigationId = 0;
+                if (args) {
+                    args->get_NavigationId(&navigationId);
+                    if (waitingForTabContent_) waitingNavigationId_ = navigationId;
                 }
+                logs_.Write("navigation.start",
+                    "generation=" + std::to_string(webViewGeneration_) +
+                    " id=" + std::to_string(navigationId) +
+                    " tab=" + std::to_string(state_.currentTabIndex));
                 return S_OK;
             }).Get(), &navigationStartingToken_);
     webView_->add_ContentLoading(
@@ -989,6 +1058,9 @@ void Application::ConfigureWebViewEvents() {
             [this](ICoreWebView2*, ICoreWebView2ContentLoadingEventArgs* args) -> HRESULT {
                 UINT64 navigationId = 0;
                 if (args) args->get_NavigationId(&navigationId);
+                logs_.Write("navigation.content_loading",
+                    "generation=" + std::to_string(webViewGeneration_) +
+                    " id=" + std::to_string(navigationId));
                 if (!waitingForTabContent_ ||
                     (waitingNavigationId_ != 0 && navigationId != waitingNavigationId_)) return S_OK;
                 EndContentWait();
@@ -1001,7 +1073,18 @@ void Application::ConfigureWebViewEvents() {
                 smokeNavigationComplete_ = true;
 #endif
                 UINT64 navigationId = 0;
-                if (args) args->get_NavigationId(&navigationId);
+                BOOL succeeded = FALSE;
+                COREWEBVIEW2_WEB_ERROR_STATUS errorStatus = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+                if (args) {
+                    args->get_NavigationId(&navigationId);
+                    args->get_IsSuccess(&succeeded);
+                    if (!succeeded) args->get_WebErrorStatus(&errorStatus);
+                }
+                logs_.Write("navigation.completed",
+                    "generation=" + std::to_string(webViewGeneration_) +
+                    " id=" + std::to_string(navigationId) +
+                    " success=" + std::to_string(succeeded ? 1 : 0) +
+                    " web_error=" + std::to_string(static_cast<int>(errorStatus)));
                 if (waitingForTabContent_ && waitingNavigationId_ != 0 &&
                     navigationId != waitingNavigationId_) return S_OK;
                 if (waitingForTabContent_) {
@@ -1231,21 +1314,75 @@ return width>0&&height>0?width/height:0})())JS";
 }
 
 void Application::HandleProcessFailure(COREWEBVIEW2_PROCESS_FAILED_KIND kind) {
+    logs_.Write("webview.process_failed",
+        "kind=" + std::to_string(static_cast<int>(kind)) +
+        " generation=" + std::to_string(webViewGeneration_));
     hotkeys_.CancelActiveGesture();
     EndContentWait();
     if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED ||
         kind == COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED) {
+        logs_.Write("webview.process_failed.reload_requested");
         if (webView_) webView_->Reload();
         return;
     }
-    if (!webViewRecoveryPending_) {
-        webViewRecoveryPending_ = true;
-        PostMessageW(mainWindow_, kRecreateWebViewMessage, 0, 0);
+    RequestWebViewRecovery();
+}
+
+void Application::RequestWebViewRecovery() {
+    if (shuttingDown_ || webViewRecoveryPending_ || !mainWindow_) return;
+    webViewRecoveryPending_ = PostMessageW(mainWindow_, kRecreateWebViewMessage, 0, 0) != FALSE;
+    logs_.Write("webview.recovery.queued",
+        "posted=" + std::to_string(webViewRecoveryPending_ ? 1 : 0) +
+        " generation=" + std::to_string(webViewGeneration_));
+}
+
+void Application::ProbeWebViewResponsiveness() {
+    if (shuttingDown_ || !webView_ || windowModes_.IsHidden() ||
+        contentProbePending_ || webViewRecoveryPending_) return;
+    const ULONGLONG now = GetTickCount64();
+    if (lastContentRecoveryTick_ != 0 && now - lastContentRecoveryTick_ < 60000) {
+        logs_.Write("webview.probe.skipped_cooldown");
+        return;
+    }
+
+    const UINT64 generation = webViewGeneration_;
+    const UINT64 serial = ++contentProbeSerial_;
+    contentProbePending_ = true;
+    logs_.Write("webview.probe.start",
+        "generation=" + std::to_string(generation) +
+        " serial=" + std::to_string(serial));
+    if (!SetTimer(mainWindow_, kContentProbeTimerId, 2000, nullptr)) {
+        logs_.Write("webview.probe.timer_failed");
+        contentProbePending_ = false;
+        return;
+    }
+    const HRESULT hr = webView_->ExecuteScript(L"0",
+        Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+            [this, generation, serial](HRESULT result, PCWSTR) -> HRESULT {
+                if (!shuttingDown_ && generation == webViewGeneration_ &&
+                    serial == contentProbeSerial_ && contentProbePending_ &&
+                    SUCCEEDED(result)) {
+                    logs_.Write("webview.probe.ok",
+                        "generation=" + std::to_string(generation) +
+                        " serial=" + std::to_string(serial));
+                    contentProbePending_ = false;
+                    ++contentProbeSerial_;
+                    if (mainWindow_) KillTimer(mainWindow_, kContentProbeTimerId);
+                }
+                return S_OK;
+            }).Get());
+    // A synchronous COM failure still gives the timeout path a chance to
+    // recreate the renderer; do not turn transient errors into a UI dialog.
+    if (FAILED(hr)) {
+        logs_.Write("webview.probe.submit_failed",
+            "hr=" + std::to_string(static_cast<unsigned long>(hr)));
     }
 }
 
 void Application::RecreateWebView() {
     if (shuttingDown_) return;
+    logs_.Write("webview.recovery.begin",
+        "generation=" + std::to_string(webViewGeneration_));
     webViewRecoveryPending_ = false;
     hotkeys_.CancelActiveGesture();
     inputGuard_.SetWebTyping(false);
@@ -1258,11 +1395,18 @@ void Application::RecreateWebView() {
 }
 
 void Application::CloseWebView() {
+    logs_.Write("webview.close", "generation=" + std::to_string(webViewGeneration_));
 #ifdef XIAOCHUANG_SMOKE_TEST
     smokeNavigationComplete_ = false;
 #endif
     ++webViewGeneration_;
-    if (mainWindow_) KillTimer(mainWindow_, kContentWaitTimerId);
+    if (mainWindow_) {
+        KillTimer(mainWindow_, kContentWaitTimerId);
+        KillTimer(mainWindow_, kContentProbeTimerId);
+        KillTimer(mainWindow_, kContentHealthTimerId);
+    }
+    contentProbePending_ = false;
+    ++contentProbeSerial_;
     waitingForTabContent_ = false;
     waitingNavigationId_ = 0;
     contentWaitStartedAt_ = 0;
@@ -1279,12 +1423,16 @@ void Application::CreateNewTab(const std::wstring& url, const std::wstring& titl
     const std::wstring targetTitle = IsPlaceholderTabTitle(title)
         ? SuggestedTitleForUrl(targetUrl) : title;
     state_.tabs.push_back({targetTitle, targetUrl});
+    logs_.Write("tabs.created", "count=" + std::to_string(state_.tabs.size()) +
+        " activate=" + std::to_string(activate ? 1 : 0));
     RebuildTabControl();
     if (activate) SwitchTab(static_cast<int>(state_.tabs.size()) - 1);
 }
 
 void Application::CloseTab(int index) {
     if (index < 0 || index >= static_cast<int>(state_.tabs.size())) return;
+    logs_.Write("tabs.close_requested", "index=" + std::to_string(index) +
+        " count=" + std::to_string(state_.tabs.size()));
     const bool closingCurrent = index == state_.currentTabIndex;
     if (state_.tabs.size() == 1) {
         state_.tabs[0] = {SuggestedTitleForUrl(state_.settings.homeUrl), state_.settings.homeUrl};
@@ -1326,6 +1474,8 @@ void Application::CloseAllTabs() {
 
 void Application::SwitchTab(int index) {
     if (index < 0 || index >= static_cast<int>(state_.tabs.size())) return;
+    logs_.Write("tabs.switch", "index=" + std::to_string(index) +
+        " count=" + std::to_string(state_.tabs.size()));
     state_.currentTabIndex = index;
     TabCtrl_SetCurSel(tabControl_, index);
     const TabData& tab = state_.tabs[static_cast<size_t>(index)];
@@ -1437,6 +1587,8 @@ void Application::ShowTabContextMenu(POINT screenPoint) {
                 kCloseOtherTabsCommand, L"关闭其他标签页");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kCloseAllTabsCommand, L"关闭全部标签页");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kRepairWebViewCommand, L"网页白屏 / 无法操作？重建网页视图");
     SetForegroundWindow(mainWindow_);
     const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                         screenPoint.x, screenPoint.y, 0, mainWindow_, nullptr);
@@ -1444,6 +1596,10 @@ void Application::ShowTabContextMenu(POINT screenPoint) {
     if (command == kCloseCurrentTabCommand) CloseTab(index);
     else if (command == kCloseOtherTabsCommand) CloseOtherTabs(index);
     else if (command == kCloseAllTabsCommand) CloseAllTabs();
+    else if (command == kRepairWebViewCommand) {
+        logs_.Write("webview.recovery.manual_requested");
+        RequestWebViewRecovery();
+    }
     PostMessageW(mainWindow_, WM_NULL, 0, 0);
 }
 
@@ -1528,22 +1684,43 @@ void Application::ShowBookmarkMenu() {
 void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) {
     const std::wstring normalized = NormalizeInputUrl(url);
     if (!IsSupportedWebNavigationUrl(normalized)) {
+        logs_.Write("navigation.unsupported_scheme");
         MessageBoxW(mainWindow_, L"仅支持 http、https、file 和 about:blank 地址。",
                     L"无法打开地址", MB_OK | MB_ICONWARNING);
         return;
     }
+    // Each user navigation owns its own independent 5s health check.
+    // Invalidate old probes so late ExecuteScript callbacks cannot cancel new ones.
+    if (mainWindow_) {
+        KillTimer(mainWindow_, kContentProbeTimerId);
+        KillTimer(mainWindow_, kContentHealthTimerId);
+    }
+    contentProbePending_ = false;
+    ++contentProbeSerial_;
     UpdateCurrentTabUrl(normalized);
+    logs_.Write("navigation.requested",
+        "generation=" + std::to_string(webViewGeneration_) +
+        " tab=" + std::to_string(state_.currentTabIndex) +
+        " check_seconds=" + std::to_string(state_.settings.blankPageCheckSeconds) +
+        " ready=" + std::to_string(webViewReady_ ? 1 : 0));
     if (webView_) {
         if (concealUntilContent) {
             if (windowModes_.IsWebFullscreen()) {
                 ExecuteScript(L"if(document.fullscreenElement) document.exitFullscreen();");
                 windowModes_.LeaveWebFullscreen();
             }
-            webView_->Stop();
+            // Navigate replaces the pending navigation itself. Calling Stop first can
+            // race its completion events against the new tab's navigation.
             BeginContentWait();
+            // Check this navigation once after the configurable delay, even
+            // when ContentLoading or NavigationCompleted fired normally.
+            const UINT delayMs = static_cast<UINT>(state_.settings.blankPageCheckSeconds * 1000);
+            SetTimer(mainWindow_, kContentHealthTimerId, delayMs, nullptr);
         }
         const HRESULT result = webView_->Navigate(normalized.c_str());
         if (FAILED(result)) {
+            logs_.Write("navigation.submit_failed",
+                "hr=" + std::to_string(static_cast<unsigned long>(result)));
             EndContentWait();
             ShowError(L"导航失败", L"无法打开该地址。", result);
         }
@@ -1554,8 +1731,10 @@ void Application::BeginContentWait() {
     waitingForTabContent_ = true;
     waitingNavigationId_ = 0;
     contentWaitStartedAt_ = GetTickCount64();
-    if (webViewController_) webViewController_->put_IsVisible(FALSE);
-    SetTimer(mainWindow_, kContentWaitTimerId, 15000, nullptr);
+    // Never conceal the shared WebView while navigating. The user-configured
+    // one-shot timeout only clears the loading indicator, not the page.
+    const UINT delayMs = static_cast<UINT>(state_.settings.blankPageCheckSeconds * 1000);
+    SetTimer(mainWindow_, kContentWaitTimerId, delayMs, nullptr);
     InvalidateRect(mainWindow_, nullptr, TRUE);
 }
 
@@ -1565,8 +1744,15 @@ void Application::EndContentWait() {
     waitingForTabContent_ = false;
     waitingNavigationId_ = 0;
     contentWaitStartedAt_ = 0;
-    if (webViewController_ && !windowModes_.IsHidden()) webViewController_->put_IsVisible(TRUE);
-    if (wasWaiting && mainWindow_) InvalidateRect(mainWindow_, nullptr, FALSE);
+    if (webViewController_) {
+        const BOOL render = !windowModes_.IsHidden() || state_.settings.backgroundMediaHotkeys;
+        webViewController_->put_IsVisible(render);
+    }
+    if (wasWaiting) {
+        logs_.Write("navigation.wait_ended",
+            "generation=" + std::to_string(webViewGeneration_));
+        if (mainWindow_) InvalidateRect(mainWindow_, nullptr, FALSE);
+    }
 }
 
 void Application::ToggleHidden() {
@@ -1580,14 +1766,14 @@ void Application::SetHidden(bool hidden) {
     }
     if (webViewController_) {
         const BOOL render = !hidden || state_.settings.backgroundMediaHotkeys;
-        webViewController_->put_IsVisible(render && !waitingForTabContent_);
+        webViewController_->put_IsVisible(render);
     }
     windowModes_.SetHidden(hidden);
     state_.windowHidden = hidden;
     if (!hidden) {
         ResizeWebView();
         if (webViewController_) {
-            webViewController_->put_IsVisible(waitingForTabContent_ ? FALSE : TRUE);
+            webViewController_->put_IsVisible(TRUE);
             webViewController_->NotifyParentWindowPositionChanged();
         }
         RedrawWindow(mainWindow_, nullptr, nullptr,
@@ -1746,11 +1932,30 @@ void Application::RestoreFromUserAction() {
     SetForegroundWindow(mainWindow_);
     if (webViewController_) {
         ResizeWebView();
-        webViewController_->put_IsVisible(waitingForTabContent_ ? FALSE : TRUE);
+        webViewController_->put_IsVisible(TRUE);
         webViewController_->NotifyParentWindowPositionChanged();
     }
     RedrawWindow(mainWindow_, nullptr, nullptr,
                  RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
+}
+
+void Application::OpenLogFolder() {
+    if (!logs_.EnsureDirectory()) {
+        MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_,
+                    L"无法创建日志文件夹。请检查小窗所在文件夹是否具有写入权限。",
+                    L"日志不可用", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    logs_.Write("logs.folder.opened");
+    const auto dir = logs_.Directory().wstring();
+    const HINSTANCE opened = ShellExecuteW(
+        settingsWindow_ ? settingsWindow_ : mainWindow_,
+        L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(opened) <= 32) {
+        MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_,
+                    L"无法打开日志文件夹。请手动打开程序目录下的 logs 文件夹。",
+                    L"打开失败", MB_OK | MB_ICONWARNING);
+    }
 }
 
 void Application::ShowSettingsWindow() {
@@ -1830,6 +2035,19 @@ void Application::CreateSettingsControls(HWND window) {
     HWND zoomRefreshNote = CreateLabel(window, L"取消固定后，刷新网页恢复手动缩放；不会自动刷新以免打断播放。");
     MoveWindow(zoomRefreshNote, left, y, Scale(650), Scale(28), FALSE);
     y += Scale(32);
+    // This adjusts when a *one-shot* white-screen health check starts.
+    // The check never blindly refreshes a slowly loading page.
+    label(L"白屏检测等待", y);
+    settingsControls_.blankPageCheck = edit(SettingsBlankPageCheck, y, Scale(90));
+    SendMessageW(settingsControls_.blankPageCheck, EM_SETLIMITTEXT, 2, 0);
+    HWND blankCheckUnit = CreateLabel(window, L"秒");
+    MoveWindow(blankCheckUnit, fieldX + Scale(102), y + Scale(4),
+               Scale(42), Scale(24), FALSE);
+    y += row;
+    HWND blankCheckNote = CreateLabel(window,
+        L"3–30秒，默认5秒。仅检测网页响应，异常时尝试恢复，不会定时刷新。");
+    MoveWindow(blankCheckNote, left, y, Scale(650), Scale(28), FALSE);
+    y += Scale(34);
     settingsControls_.autoFitFullscreen = checkbox(
         L"网页视频全屏时自动按画面比例调整小窗大小", SettingsAutoFitFullscreen, y);
     y += Scale(30);
@@ -1845,9 +2063,25 @@ void Application::CreateSettingsControls(HWND window) {
     heading(L"沉浸");
     label(L"挖孔半径（像素）", y);
     settingsControls_.radius = edit(SettingsRadius, y, Scale(130));
-    label(L"吸附距离", y + row);
-    settingsControls_.snap = edit(SettingsSnap, y + row, Scale(130));
-    y += row * 2;
+    y += row;
+    // Keep the input aligned with other settings. The localized label must
+    // fit the common label column; show its unit next to the value instead.
+    label(L"挖孔刷新间隔", y);
+    settingsControls_.holeRefresh = edit(SettingsHoleRefresh, y, Scale(130));
+    SendMessageW(settingsControls_.holeRefresh, EM_SETLIMITTEXT, 3, 0);
+    HWND refreshUnit = CreateLabel(window, L"ms");
+    MoveWindow(refreshUnit, fieldX + Scale(140), y + Scale(5),
+               Scale(50), Scale(24), FALSE);
+    y += row;
+    // A full-width, dedicated row prevents localization/DPI wrapping from
+    // overlapping the next setting (the old inline 380px label was too narrow).
+    HWND refreshNote = CreateLabel(window,
+        L"10–100ms，默认16ms。数值越小，跟随越快，资源开销可能增加。");
+    MoveWindow(refreshNote, left, y, Scale(650), Scale(28), FALSE);
+    y += Scale(34);
+    label(L"吸附距离", y);
+    settingsControls_.snap = edit(SettingsSnap, y, Scale(130));
+    y += row;
     label(L"沉浸模式", y);
     settingsControls_.style = combo(SettingsStyle, y, Scale(230));
     SendMessageW(settingsControls_.style, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"鼠标圆形挖孔"));
@@ -1905,8 +2139,24 @@ void Application::CreateSettingsControls(HWND window) {
     SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"跟随系统"));
     SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"浅色"));
     SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"深色"));
-    y += Scale(44);
-    settingsControls_.diagnostics = CreateThemedButton(window, L"复制诊断信息", SettingsDiagnostics);
+    y += Scale(40);
+    heading(L"日志");
+    settingsControls_.logAutoClean = checkbox(
+        L"自动清理旧日志", SettingsLogAutoClean, y);
+    y += row;
+    label(L"日志保留时间", y);
+    settingsControls_.logRetention = combo(SettingsLogRetention, y, Scale(150));
+    for (const int days : {3, 7, 30}) {
+        const std::wstring text = std::to_wstring(days) + L" 天";
+        SendMessageW(settingsControls_.logRetention, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(text.c_str()));
+    }
+    y += row;
+    HWND logNote = CreateLabel(window,
+        L"日志与 config.ini 同级的 logs 文件夹；不记录网址、搜索词或 Cookie。");
+    MoveWindow(logNote, left, y, Scale(650), Scale(28), FALSE);
+    y += Scale(34);
+    settingsControls_.diagnostics = CreateThemedButton(window, L"打开日志文件夹", SettingsDiagnostics);
     MoveWindow(settingsControls_.diagnostics, fieldX, y, Scale(190), Scale(32), FALSE);
     settingsControls_.about = CreateThemedButton(window, L"关于 v1.4", SettingsAbout);
     MoveWindow(settingsControls_.about, fieldX + Scale(202), y, Scale(130), Scale(32), FALSE);
@@ -1932,6 +2182,9 @@ void Application::ReadSettingsControls() {
     const auto finishUpdate = wil::scope_exit([this] { updatingSettingsControls_ = false; });
     AppSettings old = state_.settings;
     state_.settings.holeRadius = ParseInteger(settingsControls_.radius, old.holeRadius);
+    state_.settings.holeRefreshMs = ParseInteger(settingsControls_.holeRefresh, old.holeRefreshMs);
+    state_.settings.blankPageCheckSeconds = ParseInteger(
+        settingsControls_.blankPageCheck, old.blankPageCheckSeconds);
     state_.settings.snapThreshold = ParseInteger(settingsControls_.snap, old.snapThreshold);
     state_.settings.autoPauseOnHide = IsChecked(settingsControls_.autoPause);
     state_.settings.fixedWebZoomEnabled = IsChecked(settingsControls_.fixedZoom);
@@ -1951,7 +2204,14 @@ void Application::ReadSettingsControls() {
     state_.settings.holdPlaybackRate = ComboValue(settingsControls_.holdRate, old.holdPlaybackRate - 2) + 2;
     state_.settings.renderMode = static_cast<RenderMode>(ComboValue(settingsControls_.renderMode));
     state_.settings.themeMode = static_cast<ThemeMode>(ComboValue(settingsControls_.theme));
+    state_.settings.autoCleanLogs = IsChecked(settingsControls_.logAutoClean);
+    const int logIndex = ComboValue(settingsControls_.logRetention);
+    state_.settings.logRetentionDays = logIndex == 0 ? 3 : logIndex == 2 ? 30 : 7;
     state_.settings.Clamp();
+    SetWindowTextW(settingsControls_.holeRefresh,
+                   std::to_wstring(state_.settings.holeRefreshMs).c_str());
+    SetWindowTextW(settingsControls_.blankPageCheck,
+                   std::to_wstring(state_.settings.blankPageCheckSeconds).c_str());
     EnableWindow(settingsControls_.zoomPercent, state_.settings.fixedWebZoomEnabled ? TRUE : FALSE);
     SetWindowTextW(settingsControls_.zoomPercent,
         std::to_wstring(state_.settings.fixedWebZoomPercent).c_str());
@@ -1966,7 +2226,8 @@ void Application::ReadSettingsControls() {
     if (old.immersionStyle != state_.settings.immersionStyle ||
         old.holeOpacityPercent != state_.settings.holeOpacityPercent ||
         old.autoHideOpacityPercent != state_.settings.autoHideOpacityPercent ||
-        old.holeRadius != state_.settings.holeRadius) {
+        old.holeRadius != state_.settings.holeRadius ||
+        old.holeRefreshMs != state_.settings.holeRefreshMs) {
         windowModes_.RefreshVisualState();
     }
     if (old.disableHotkeysOnTyping != state_.settings.disableHotkeysOnTyping ||
@@ -1978,6 +2239,14 @@ void Application::ReadSettingsControls() {
         windowModes_.IsWebFullscreen()) {
         HandleWebFullscreenChanged();
     }
+    if (old.autoCleanLogs != state_.settings.autoCleanLogs ||
+        old.logRetentionDays != state_.settings.logRetentionDays) {
+        logs_.Write("logs.retention.changed",
+            "enabled=" + std::to_string(state_.settings.autoCleanLogs ? 1 : 0) +
+            " days=" + std::to_string(state_.settings.logRetentionDays));
+        logs_.SetRetention(state_.settings.autoCleanLogs, state_.settings.logRetentionDays);
+    }
+    EnableWindow(settingsControls_.logRetention, state_.settings.autoCleanLogs ? TRUE : FALSE);
     SaveConfiguration();
     // WebView COM calls may pump new UI messages. Finish native controls and
     // persistence first so a subsequent edit cannot be overwritten by this one.
@@ -1992,6 +2261,10 @@ void Application::RefreshSettingsControls() {
     if (!settingsWindow_) return;
     updatingSettingsControls_ = true;
     SetWindowTextW(settingsControls_.radius, std::to_wstring(state_.settings.holeRadius).c_str());
+    SetWindowTextW(settingsControls_.holeRefresh,
+                   std::to_wstring(state_.settings.holeRefreshMs).c_str());
+    SetWindowTextW(settingsControls_.blankPageCheck,
+                   std::to_wstring(state_.settings.blankPageCheckSeconds).c_str());
     SetWindowTextW(settingsControls_.snap, std::to_wstring(state_.settings.snapThreshold).c_str());
     SetWindowTextW(settingsControls_.home, state_.settings.homeUrl.c_str());
     SetCheck(settingsControls_.autoPause, state_.settings.autoPauseOnHide);
@@ -2010,6 +2283,11 @@ void Application::RefreshSettingsControls() {
     SelectComboValue(settingsControls_.holdRate, state_.settings.holdPlaybackRate - 2);
     SelectComboValue(settingsControls_.renderMode, static_cast<int>(state_.settings.renderMode));
     SelectComboValue(settingsControls_.theme, static_cast<int>(state_.settings.themeMode));
+    SetCheck(settingsControls_.logAutoClean, state_.settings.autoCleanLogs);
+    SelectComboValue(settingsControls_.logRetention,
+        state_.settings.logRetentionDays == 3 ? 0 :
+        state_.settings.logRetentionDays == 30 ? 2 : 1);
+    EnableWindow(settingsControls_.logRetention, state_.settings.autoCleanLogs ? TRUE : FALSE);
     for (size_t index = 0; index < kHotkeyCount; ++index) {
         SetWindowTextW(settingsControls_.hotkeys[index], HotkeyDisplayText(state_.hotkeys[index]).c_str());
         SetCheck(settingsControls_.hotkeyEnabled[index], state_.hotkeys[index].enabled);
@@ -2022,6 +2300,7 @@ void Application::RefreshOpacityControls() {
     if (!settingsWindow_ || !settingsControls_.opacitySlider || updatingSettingsControls_) return;
     updatingSettingsControls_ = true;
     const bool visible = state_.settings.immersionStyle == ImmersionStyle::AutoHide;
+    EnableWindow(settingsControls_.holeRefresh, visible ? FALSE : TRUE);
     const int value = state_.settings.autoHideOpacityPercent;
     SendMessageW(settingsControls_.opacitySlider, TBM_SETPOS, TRUE, value);
     SetWindowTextW(settingsControls_.opacityEdit, std::to_wstring(value).c_str());
@@ -2137,12 +2416,12 @@ LRESULT Application::HandleSettingsMessage(HWND window, UINT message, WPARAM wPa
             return 0;
         }
         if (id == SettingsDiagnostics) {
-            RequestMediaDiagnostics();
+            OpenLogFolder();
             return 0;
         }
         if (id == SettingsAbout) {
             MessageBoxW(window,
-                L"小窗浏览器 v1.4.4\n\n"
+                L"小窗浏览器 v1.4.5\n\n"
                 L"专为单屏玩家打造的 Windows 画中画浏览器\n"
                 L"C++20 / Win32 / WebView2 1.0.4078.44\n\n"
                 L"https://github.com/azurplain/Mini-Window-Browser",
@@ -2528,6 +2807,8 @@ void Application::ResetToDefaults() {
     const ThemeMode retainedTheme = state_.settings.themeMode;
     const RenderMode retainedRender = state_.settings.renderMode;
     state_.settings = AppSettings{};
+    logs_.SetRetention(state_.settings.autoCleanLogs, state_.settings.logRetentionDays);
+    logs_.Write("settings.reset");
     webZoom_.Configure(state_.settings);
     state_.settings.themeMode = retainedTheme;
     state_.settings.renderMode = retainedRender;
@@ -2535,6 +2816,7 @@ void Application::ResetToDefaults() {
     inputGuard_.SetEnabled(state_.settings.disableHotkeysOnTyping);
     RECT rect{100, 100, 1100, 700};
     windowModes_.ApplyPresetGeometry(rect, false);
+    windowModes_.RefreshVisualState();
     RefreshTrayMode(); RefreshHotkeys(); RefreshSettingsControls(); SaveConfiguration();
 }
 
@@ -2616,9 +2898,14 @@ void Application::SaveConfiguration() {
 }
 
 void Application::ApplyPreset(const Preset& preset) {
+    logs_.Write("preset.apply",
+        "tabs=" + std::to_string(preset.tabs.size()) +
+        " check_seconds=" + std::to_string(preset.blankPageCheckSeconds));
     const ThemeMode retainedTheme = state_.settings.themeMode;
     const RenderMode retainedRender = state_.settings.renderMode;
     state_.settings.holeRadius = preset.holeRadius;
+    state_.settings.holeRefreshMs = preset.holeRefreshMs;
+    state_.settings.blankPageCheckSeconds = preset.blankPageCheckSeconds;
     state_.settings.snapThreshold = preset.snapThreshold;
     state_.settings.holeOpacityPercent = preset.holeOpacityPercent;
     state_.settings.autoHideOpacityPercent = preset.autoHideOpacityPercent;
@@ -2640,6 +2927,7 @@ void Application::ApplyPreset(const Preset& preset) {
     state_.hotkeys = preset.hotkeys;
     webZoom_.Configure(state_.settings);
     windowModes_.ApplyPresetGeometry(preset.normalRect, preset.maximized);
+    windowModes_.RefreshVisualState();
     if (!preset.tabs.empty()) {
         state_.tabs = preset.tabs;
         for (TabData& tab : state_.tabs) {
@@ -2663,6 +2951,8 @@ Preset Application::CapturePreset(const std::wstring& name) const {
     preset.normalRect = windowModes_.NormalRect();
     preset.maximized = windowModes_.IsSeamlessMaximized();
     preset.holeRadius = state_.settings.holeRadius;
+    preset.holeRefreshMs = state_.settings.holeRefreshMs;
+    preset.blankPageCheckSeconds = state_.settings.blankPageCheckSeconds;
     preset.snapThreshold = state_.settings.snapThreshold;
     preset.holeOpacityPercent = state_.settings.holeOpacityPercent;
     preset.autoHideOpacityPercent = state_.settings.autoHideOpacityPercent;

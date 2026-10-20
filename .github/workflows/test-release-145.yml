@@ -1,0 +1,108 @@
+name: Build v1.4.5 test release
+on:
+  push:
+    branches:
+      - codex/hole-refresh-watchdog-145-test2
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Never race two builds while replacing the same prerelease asset.
+concurrency:
+  group: one-updatable-145-test-release
+  cancel-in-progress: true
+
+jobs:
+  windows-test-release:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - uses: NuGet/setup-nuget@v2
+      - name: Restore native NuGet dependencies
+        shell: pwsh
+        run: |
+          nuget install packages.config -OutputDirectory packages -NonInteractive
+      - name: Build x64 release and core tests
+        shell: pwsh
+        run: |
+          msbuild '小窗.slnx' /t:Rebuild /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:SmokeTestAsInvoker=false /m /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+          & './x64/Release/XiaoChuang.Tests.exe'
+          if ($LASTEXITCODE -ne 0) { throw 'Core tests failed' }
+      - name: Package pre-release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = 'Mini-Window-Browser-v1.4.5-test.2-x64'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          Copy-Item 'x64/Release/XiaoChuang.exe' $root
+          $loader = Get-ChildItem -Path 'x64/Release','packages/Microsoft.Web.WebView2.1.0.4078.44' -Filter WebView2Loader.dll -Recurse -File | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          if (-not $loader) { throw 'Missing x64 WebView2Loader.dll' }
+          Copy-Item $loader.FullName $root
+          Copy-Item '用户手册.md' (Join-Path $root 'README-使用说明.md')
+          # Keep developer smoke-test records and changelogs in GitHub; the ZIP
+          # should contain only files ordinary users actually need.
+          Copy-Item '开启鼠标穿透和隐藏标题栏按0.txt' $root
+          Copy-Item '小窗吸附后按住Ctrl拖动.txt' $root
+          Copy-Item '长时间白屏时右键标签页重载.txt' $root
+          Copy-Item 'LICENSE.txt' $root
+          Copy-Item 'THIRD_PARTY_NOTICES.txt' $root
+          New-Item -ItemType Directory -Path (Join-Path $root 'licenses') | Out-Null
+          Copy-Item 'packages/Microsoft.Web.WebView2.1.0.4078.44/LICENSE.txt' (Join-Path $root 'licenses/WebView2-SDK-LICENSE.txt')
+          Copy-Item 'packages/Microsoft.Web.WebView2.1.0.4078.44/NOTICE.txt' (Join-Path $root 'licenses/WebView2-SDK-NOTICE.txt')
+          Copy-Item 'packages/Microsoft.Windows.ImplementationLibrary.1.0.250325.1/LICENSE' (Join-Path $root 'licenses/WIL-LICENSE.txt')
+          Copy-Item 'packages/Microsoft.Windows.ImplementationLibrary.1.0.250325.1/ThirdPartyNotices.txt' (Join-Path $root 'licenses/WIL-ThirdPartyNotices.txt')
+          foreach ($hintName in @(
+            '开启鼠标穿透和隐藏标题栏按0.txt',
+            '小窗吸附后按住Ctrl拖动.txt',
+            '长时间白屏时右键标签页重载.txt')) {
+            $hint = Get-Item (Join-Path $root $hintName)
+            if ($hint.Length -ne 0) { throw "Reminder must be empty: $hintName" }
+          }
+          $expected = @(
+            'XiaoChuang.exe', 'WebView2Loader.dll', 'README-使用说明.md',
+            '开启鼠标穿透和隐藏标题栏按0.txt', '小窗吸附后按住Ctrl拖动.txt',
+            '长时间白屏时右键标签页重载.txt',
+            'LICENSE.txt', 'THIRD_PARTY_NOTICES.txt', 'licenses')
+          $actual = @(Get-ChildItem -LiteralPath $root | Select-Object -ExpandProperty Name)
+          $unexpected = @($actual | Where-Object { $_ -notin $expected })
+          if ($unexpected.Count -gt 0 -or $actual.Count -ne $expected.Count) {
+            throw "Unexpected package contents: $($actual -join ', ')"
+          }
+          Compress-Archive -Path $root -DestinationPath "$root.zip"
+          Get-FileHash "$root.zip" -Algorithm SHA256 | Format-List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mini-Window-Browser-v1.4.5-test.2-x64
+          path: Mini-Window-Browser-v1.4.5-test.2-x64.zip
+          if-no-files-found: error
+      - name: Publish prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'v1.4.5-test.2'
+          $zip = 'Mini-Window-Browser-v1.4.5-test.2-x64.zip'
+          # Keep ONE mutable test release URL and archive; only publish after
+          # Windows compilation and core tests have passed.
+          $notes = 'RELEASE_NOTES-1.4.5-test.2.md'
+          $release = gh release view $tag --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            # Update the source tag to match the new successful binary.
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -f $tag "${{ github.sha }}"
+            git push --force origin "refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to move the single test tag' }
+            gh release upload $tag $zip --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to replace test ZIP' }
+            gh release edit $tag --notes-file $notes --prerelease
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to update release notes' }
+          } else {
+            gh release create $tag $zip --target "${{ github.sha }}" --title '小窗浏览器 v1.4.5-test.2｜可调挖孔刷新与白屏恢复测试' --notes-file $notes --prerelease
+            if ($LASTEXITCODE -ne 0) { throw 'Prerelease creation failed' }
+          }
+          # The superseded test.1 was retired in the previous deployment;
+          # do not query its missing tag with PowerShell's native exit handling.

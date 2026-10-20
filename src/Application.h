@@ -4,6 +4,7 @@
 #include "ConfigStore.h"
 #include "HotkeyManager.h"
 #include "InputGuard.h"
+#include "LogStore.h"
 #include "ThemeManager.h"
 #include "WindowModeController.h"
 #include "WebViewZoom.h"
@@ -58,6 +59,10 @@ private:
         SettingsLockFullscreenAspect = 2019,
         SettingsFixedZoom = 2020,
         SettingsZoomPercent = 2021,
+        SettingsHoleRefresh = 2022,
+        SettingsBlankPageCheck = 2023,
+        SettingsLogAutoClean = 2024,
+        SettingsLogRetention = 2025,
         SettingsHotkeyBase = 2100,
         SettingsHotkeyEnabledBase = 2200,
 
@@ -93,6 +98,8 @@ private:
     static constexpr UINT_PTR kSettingsSaveTimerId = 4404;
     static constexpr UINT_PTR kInputDebounceTimerId = 4405;
     static constexpr UINT_PTR kContentWaitTimerId = 4406;
+    static constexpr UINT_PTR kContentProbeTimerId = 4408;
+    static constexpr UINT_PTR kContentHealthTimerId = 4409;
     static constexpr UINT_PTR kHotkeyRegistrationRetryTimerId = 4407;
     static constexpr int kTrayIconId = 1;
 
@@ -130,6 +137,9 @@ private:
     void HandleWebFullscreenChanged();
     void HandleProcessFailure(COREWEBVIEW2_PROCESS_FAILED_KIND kind);
     void RecreateWebView();
+    void RequestWebViewRecovery();
+    void ProbeWebViewResponsiveness();
+    void OpenLogFolder();
     void CloseWebView();
 
     void CreateNewTab(const std::wstring& url, const std::wstring& title, bool activate);
@@ -247,6 +257,7 @@ private:
 
     AppState state_;
     ConfigStore config_;
+    LogStore logs_{config_.Path()};
     ThemeManager theme_;
     HotkeyManager hotkeys_;
     InputGuard inputGuard_;
@@ -270,6 +281,8 @@ private:
 
     struct SettingsControls {
         HWND radius = nullptr;
+        HWND holeRefresh = nullptr;
+        HWND blankPageCheck = nullptr;
         HWND snap = nullptr;
         HWND style = nullptr;
         HWND opacitySlider = nullptr;
@@ -290,6 +303,8 @@ private:
         HWND renderMode = nullptr;
         HWND theme = nullptr;
         HWND diagnostics = nullptr;
+        HWND logAutoClean = nullptr;
+        HWND logRetention = nullptr;
         HWND about = nullptr;
         HWND repository = nullptr;
         std::array<HWND, kHotkeyCount> hotkeys{};
@@ -302,6 +317,9 @@ private:
 #endif
     bool updatingSettingsControls_ = false;
     bool waitingForTabContent_ = false;
+    bool contentProbePending_ = false;
+    UINT64 contentProbeSerial_ = 0;
+    ULONGLONG lastContentRecoveryTick_ = 0;
     UINT64 waitingNavigationId_ = 0;
     ULONGLONG contentWaitStartedAt_ = 0;
     int settingsScrollPosition_ = 0;

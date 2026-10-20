@@ -211,9 +211,8 @@ void WindowModeController::OnImmersionTimer() {
     POINT cursor{};
     if (!GetCursorPos(&cursor)) return;
     if (visibleMode_ == WindowMode::ImmersionHole) {
-        constexpr int kCursorQuantum = 4;
-        cursor.x = (cursor.x / kCursorQuantum) * kCursorQuantum;
-        cursor.y = (cursor.y / kCursorQuantum) * kCursorQuantum;
+        // Keep full cursor precision: rounding in v1.4.3 made the hole jump
+        // in 4px steps and magnified the timer's visible lag.
         if (cursor.x == lastCursor_.x && cursor.y == lastCursor_.y) return;
         lastCursor_ = cursor;
         POINT client = cursor;
@@ -227,9 +226,7 @@ void WindowModeController::OnImmersionTimer() {
         if (outside) {
             if (holeOutsideWindow_) return;
             holeOutsideWindow_ = true;
-            SetWindowRgn(window_, nullptr, FALSE);
-            RedrawWindow(window_, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+            SetWindowRgn(window_, nullptr, TRUE);
             return;
         }
         holeOutsideWindow_ = false;
@@ -247,11 +244,10 @@ void WindowModeController::OnImmersionTimer() {
         if (!result) result = full;
         else if (full) DeleteObject(full);
         if (!result) return;
-        if (!SetWindowRgn(window_, result, FALSE)) {
+        // TRUE redraws the changed window region. Do not queue an additional
+        // full-frame/all-children redraw for every mouse movement.
+        if (!SetWindowRgn(window_, result, TRUE)) {
             DeleteObject(result);
-        } else {
-            RedrawWindow(window_, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
         }
         return;
     }
@@ -322,6 +318,9 @@ void WindowModeController::RefreshVisualState() {
         holeOutsideWindow_ = false;
         SetLayeredWindowAttributes(window_, 0, ConfiguredAlpha(), LWA_ALPHA);
         OnImmersionTimer();
+        // SetTimer with the same ID updates the interval immediately when edited.
+        if (!hidden_) SetTimer(window_, kImmersionTimerId,
+                              static_cast<UINT>(std::clamp(settings_->holeRefreshMs, 10, 100)), nullptr);
     } else {
         SetLayeredWindowAttributes(window_, 0, hoverApplied_ ? 0 : ConfiguredAlpha(), LWA_ALPHA);
     }
@@ -400,7 +399,12 @@ void WindowModeController::ApplyVisibleMode(WindowMode mode, bool restoreGeometr
     if (layoutCallback_) layoutCallback_();
     if (immersive && !hidden_) {
         OnImmersionTimer();
-        SetTimer(window_, kImmersionTimerId, 50, nullptr);
+        // Restore the smooth ~60Hz hole tracking from v1.3. Auto-hide has a
+        // separate hover debounce and does not need this higher frequency.
+        SetTimer(window_, kImmersionTimerId,
+                 mode == WindowMode::ImmersionHole
+                     ? static_cast<UINT>(std::clamp(settings_->holeRefreshMs, 10, 100)) : 50U,
+                 nullptr);
     }
     RedrawWindow(window_, nullptr, nullptr,
                  RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);

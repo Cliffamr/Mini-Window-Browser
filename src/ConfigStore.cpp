@@ -97,6 +97,10 @@ ConfigStore::ConfigStore(std::filesystem::path overridePath) {
 
 bool ConfigStore::Load(AppState& state) const {
     state.settings.holeRadius = ReadInt(path_, kSettings, L"HoleRadius", 400);
+    state.settings.holeRefreshMs = ReadInt(path_, kSettings, L"HoleRefreshMs", 16);
+    state.settings.blankPageCheckSeconds = ReadInt(path_, kSettings, L"BlankPageCheckSeconds", 5);
+    state.settings.autoCleanLogs = ReadInt(path_, kSettings, L"AutoCleanLogs", 1) != 0;
+    state.settings.logRetentionDays = ReadInt(path_, kSettings, L"LogRetentionDays", 7);
     state.settings.snapThreshold = ReadInt(path_, kSettings, L"SnapThreshold", 20);
     state.settings.holeOpacityPercent = ReadInt(path_, kSettings, L"HoleOpacityPercent", 100);
     state.settings.autoHideOpacityPercent = ReadInt(path_, kSettings, L"AutoHideOpacityPercent", 100);
@@ -166,6 +170,8 @@ bool ConfigStore::Load(AppState& state) const {
             ReadInt(path_, kPresets, prefix + L"W", 1000), ReadInt(path_, kPresets, prefix + L"H", 600));
         preset.maximized = ReadInt(path_, kPresets, prefix + L"Fullscreen", 0) != 0;
         preset.holeRadius = ReadInt(path_, kPresets, prefix + L"Rad", 400);
+        preset.holeRefreshMs = ReadInt(path_, kPresets, prefix + L"HoleRefreshMs", 16);
+        preset.blankPageCheckSeconds = ReadInt(path_, kPresets, prefix + L"BlankPageCheckSeconds", 5);
         preset.snapThreshold = ReadInt(path_, kPresets, prefix + L"Snap", 20);
         preset.holeOpacityPercent = ReadInt(path_, kPresets, prefix + L"HoleOpacity", 100);
         preset.autoHideOpacityPercent = ReadInt(path_, kPresets, prefix + L"AutoHideOpacity", 100);
@@ -199,6 +205,8 @@ bool ConfigStore::Load(AppState& state) const {
         preset.activeTab = std::clamp(ReadInt(path_, kPresets, prefix + L"ActiveTab", 0), 0,
             static_cast<int>(preset.tabs.size()) - 1);
         preset.holeRadius = std::clamp(preset.holeRadius, 0, 4000);
+        preset.holeRefreshMs = std::clamp(preset.holeRefreshMs, 10, 100);
+        preset.blankPageCheckSeconds = std::clamp(preset.blankPageCheckSeconds, 3, 30);
         preset.snapThreshold = std::clamp(preset.snapThreshold, 0, 200);
         preset.holeOpacityPercent = std::clamp(preset.holeOpacityPercent, 0, 100);
         preset.autoHideOpacityPercent = std::clamp(preset.autoHideOpacityPercent, 0, 100);
@@ -225,6 +233,10 @@ bool ConfigStore::Save(const AppState& state, const RECT& normalRect, bool maxim
     }
     const AppSettings& settings = state.settings;
     WriteInt(transactionPath, kSettings, L"HoleRadius", settings.holeRadius);
+    WriteInt(transactionPath, kSettings, L"HoleRefreshMs", settings.holeRefreshMs);
+    WriteInt(transactionPath, kSettings, L"BlankPageCheckSeconds", settings.blankPageCheckSeconds);
+    WriteInt(transactionPath, kSettings, L"AutoCleanLogs", settings.autoCleanLogs ? 1 : 0);
+    WriteInt(transactionPath, kSettings, L"LogRetentionDays", settings.logRetentionDays);
     WriteInt(transactionPath, kSettings, L"SnapThreshold", settings.snapThreshold);
     WriteInt(transactionPath, kSettings, L"HoleOpacityPercent", settings.holeOpacityPercent);
     WriteInt(transactionPath, kSettings, L"AutoHideOpacityPercent", settings.autoHideOpacityPercent);
@@ -301,6 +313,8 @@ bool ConfigStore::Save(const AppState& state, const RECT& normalRect, bool maxim
         WriteInt(transactionPath, kPresets, prefix + L"H", preset.normalRect.bottom - preset.normalRect.top);
         WriteInt(transactionPath, kPresets, prefix + L"Fullscreen", preset.maximized ? 1 : 0);
         WriteInt(transactionPath, kPresets, prefix + L"Rad", preset.holeRadius);
+        WriteInt(transactionPath, kPresets, prefix + L"HoleRefreshMs", preset.holeRefreshMs);
+        WriteInt(transactionPath, kPresets, prefix + L"BlankPageCheckSeconds", preset.blankPageCheckSeconds);
         WriteInt(transactionPath, kPresets, prefix + L"Snap", preset.snapThreshold);
         WriteInt(transactionPath, kPresets, prefix + L"HoleOpacity", preset.holeOpacityPercent);
         WriteInt(transactionPath, kPresets, prefix + L"AutoHideOpacity", preset.autoHideOpacityPercent);
