@@ -51,6 +51,7 @@ constexpr wchar_t kSingleInstanceName[] = L"MiniWindowBrowser-v1.4-SingleInstanc
 constexpr UINT kCloseCurrentTabCommand = 51001;
 constexpr UINT kCloseOtherTabsCommand = 51002;
 constexpr UINT kCloseAllTabsCommand = 51003;
+constexpr UINT kRepairWebViewCommand = 51004;
 
 std::wstring WindowText(HWND window) {
     const int length = GetWindowTextLengthW(window);
@@ -529,7 +530,7 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
             if (state_.settings.useSystemTray) SetHidden(true);
             return 0;
         }
-        if (!windowModes_.IsHidden() && !waitingForTabContent_ && webViewController_) {
+        if (!windowModes_.IsHidden() && webViewController_) {
             webViewController_->put_IsVisible(TRUE);
         }
         LayoutMainControls();
@@ -618,40 +619,28 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
             if (foregroundChanged) windowModes_.ReassertTopmost();
         }
         else if (wParam == kContentWaitTimerId) {
+            // This is only a 5s UI loading-indicator timeout, not a reload.
+            // A separate timer probes the shared renderer even when
+            // ContentLoading arrived, because rendering can still be stuck.
             const bool timedOut = waitingForTabContent_;
             EndContentWait();
-            // The 5s watchdog only stops the loading indicator. A separate
-            // responsiveness probe decides whether the shared WebView needs
-            // recreation; slow but responsive pages must not be blindly reloaded.
-            const ULONGLONG now = GetTickCount64();
-            if (timedOut && webView_ && !windowModes_.IsHidden() &&
-                (lastContentRecoveryTick_ == 0 || now - lastContentRecoveryTick_ >= 60000)) {
-                const UINT64 generation = webViewGeneration_;
-                contentProbePending_ = true;
-                SetTimer(window, kContentProbeTimerId, 2000, nullptr);
-                webView_->ExecuteScript(L"0",
-                    Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
-                        [this, generation](HRESULT result, PCWSTR) -> HRESULT {
-                            if (!shuttingDown_ && generation == webViewGeneration_ &&
-                                contentProbePending_ && SUCCEEDED(result)) {
-                                contentProbePending_ = false;
-                                if (mainWindow_) KillTimer(mainWindow_, kContentProbeTimerId);
-                            }
-                            return S_OK;
-                        }).Get());
-            }
-            if (state_.currentTabIndex >= 0 &&
+            if (timedOut && state_.currentTabIndex >= 0 &&
                 state_.currentTabIndex < static_cast<int>(state_.tabs.size())) {
                 TabData& tab = state_.tabs[static_cast<size_t>(state_.currentTabIndex)];
                 if (IsPlaceholderTabTitle(tab.title)) UpdateCurrentTabTitle(SuggestedTitleForUrl(tab.url));
             }
         }
+        else if (wParam == kContentHealthTimerId) {
+            KillTimer(window, kContentHealthTimerId);
+            ProbeWebViewResponsiveness();
+        }
         else if (wParam == kContentProbeTimerId) {
             KillTimer(window, kContentProbeTimerId);
             if (contentProbePending_ && !shuttingDown_ && !webViewRecoveryPending_) {
                 contentProbePending_ = false;
+                ++contentProbeSerial_;
                 lastContentRecoveryTick_ = GetTickCount64();
-                webViewRecoveryPending_ = PostMessageW(window, kRecreateWebViewMessage, 0, 0) != FALSE;
+                RequestWebViewRecovery();
             }
         }
         else if (wParam == kHotkeyRegistrationRetryTimerId) {
@@ -1267,10 +1256,42 @@ void Application::HandleProcessFailure(COREWEBVIEW2_PROCESS_FAILED_KIND kind) {
         if (webView_) webView_->Reload();
         return;
     }
-    if (!webViewRecoveryPending_) {
-        webViewRecoveryPending_ = true;
-        PostMessageW(mainWindow_, kRecreateWebViewMessage, 0, 0);
+    RequestWebViewRecovery();
+}
+
+void Application::RequestWebViewRecovery() {
+    if (shuttingDown_ || webViewRecoveryPending_ || !mainWindow_) return;
+    webViewRecoveryPending_ = PostMessageW(mainWindow_, kRecreateWebViewMessage, 0, 0) != FALSE;
+}
+
+void Application::ProbeWebViewResponsiveness() {
+    if (shuttingDown_ || !webView_ || windowModes_.IsHidden() ||
+        contentProbePending_ || webViewRecoveryPending_) return;
+    const ULONGLONG now = GetTickCount64();
+    if (lastContentRecoveryTick_ != 0 && now - lastContentRecoveryTick_ < 60000) return;
+
+    const UINT64 generation = webViewGeneration_;
+    const UINT64 serial = ++contentProbeSerial_;
+    contentProbePending_ = true;
+    if (!SetTimer(mainWindow_, kContentProbeTimerId, 2000, nullptr)) {
+        contentProbePending_ = false;
+        return;
     }
+    const HRESULT hr = webView_->ExecuteScript(L"0",
+        Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+            [this, generation, serial](HRESULT result, PCWSTR) -> HRESULT {
+                if (!shuttingDown_ && generation == webViewGeneration_ &&
+                    serial == contentProbeSerial_ && contentProbePending_ &&
+                    SUCCEEDED(result)) {
+                    contentProbePending_ = false;
+                    ++contentProbeSerial_;
+                    if (mainWindow_) KillTimer(mainWindow_, kContentProbeTimerId);
+                }
+                return S_OK;
+            }).Get());
+    // A synchronous COM failure still gives the timeout path a chance to
+    // recreate the renderer; do not turn transient errors into a UI dialog.
+    (void)hr;
 }
 
 void Application::RecreateWebView() {
@@ -1294,8 +1315,10 @@ void Application::CloseWebView() {
     if (mainWindow_) {
         KillTimer(mainWindow_, kContentWaitTimerId);
         KillTimer(mainWindow_, kContentProbeTimerId);
+        KillTimer(mainWindow_, kContentHealthTimerId);
     }
     contentProbePending_ = false;
+    ++contentProbeSerial_;
     waitingForTabContent_ = false;
     waitingNavigationId_ = 0;
     contentWaitStartedAt_ = 0;
@@ -1470,6 +1493,8 @@ void Application::ShowTabContextMenu(POINT screenPoint) {
                 kCloseOtherTabsCommand, L"关闭其他标签页");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kCloseAllTabsCommand, L"关闭全部标签页");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kRepairWebViewCommand, L"网页白屏 / 无法操作？重建网页视图");
     SetForegroundWindow(mainWindow_);
     const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                         screenPoint.x, screenPoint.y, 0, mainWindow_, nullptr);
@@ -1477,6 +1502,7 @@ void Application::ShowTabContextMenu(POINT screenPoint) {
     if (command == kCloseCurrentTabCommand) CloseTab(index);
     else if (command == kCloseOtherTabsCommand) CloseOtherTabs(index);
     else if (command == kCloseAllTabsCommand) CloseAllTabs();
+    else if (command == kRepairWebViewCommand) RequestWebViewRecovery();
     PostMessageW(mainWindow_, WM_NULL, 0, 0);
 }
 
@@ -1565,9 +1591,14 @@ void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) 
                     L"无法打开地址", MB_OK | MB_ICONWARNING);
         return;
     }
-    // A user navigation supersedes any outstanding stalled-renderer probe.
-    if (mainWindow_) KillTimer(mainWindow_, kContentProbeTimerId);
+    // Each user navigation owns its own independent 5s health check.
+    // Invalidate old probes so late ExecuteScript callbacks cannot cancel new ones.
+    if (mainWindow_) {
+        KillTimer(mainWindow_, kContentProbeTimerId);
+        KillTimer(mainWindow_, kContentHealthTimerId);
+    }
     contentProbePending_ = false;
+    ++contentProbeSerial_;
     UpdateCurrentTabUrl(normalized);
     if (webView_) {
         if (concealUntilContent) {
@@ -1578,6 +1609,9 @@ void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) 
             // Navigate replaces the pending navigation itself. Calling Stop first can
             // race its completion events against the new tab's navigation.
             BeginContentWait();
+            // Check after the new navigation has had 5s to load, even when
+            // ContentLoading or NavigationCompleted fired normally.
+            SetTimer(mainWindow_, kContentHealthTimerId, 5000, nullptr);
         }
         const HRESULT result = webView_->Navigate(normalized.c_str());
         if (FAILED(result)) {
