@@ -162,6 +162,12 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
     }
 
     config_.Load(state_);
+    logs_.SetRetention(state_.settings.autoCleanLogs, state_.settings.logRetentionDays);
+    logs_.Write("application.start",
+        "tabs=" + std::to_string(state_.tabs.size()) +
+        " auto_cleanup=" + std::to_string(state_.settings.autoCleanLogs ? 1 : 0) +
+        " retention_days=" + std::to_string(state_.settings.logRetentionDays) +
+        " check_seconds=" + std::to_string(state_.settings.blankPageCheckSeconds));
     for (const TabData& tab : state_.tabs) {
         if (!tab.url.empty() && !IsPlaceholderTabTitle(tab.title)) {
             knownPageTitles_[NormalizeComparableUrl(tab.url)] = tab.title;
@@ -221,6 +227,7 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
 void Application::Shutdown() {
     if (shuttingDown_) return;
     SaveConfiguration();
+    logs_.Write("application.shutdown", "tabs=" + std::to_string(state_.tabs.size()));
     shuttingDown_ = true;
     hotkeys_.Stop();
     inputGuard_.Stop();
@@ -1830,6 +1837,25 @@ void Application::RestoreFromUserAction() {
                  RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 
+void Application::OpenLogFolder() {
+    if (!logs_.EnsureDirectory()) {
+        MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_,
+                    L"无法创建日志文件夹。请检查小窗所在文件夹是否具有写入权限。",
+                    L"日志不可用", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    logs_.Write("logs.folder.opened");
+    const auto dir = logs_.Directory().wstring();
+    const HINSTANCE opened = ShellExecuteW(
+        settingsWindow_ ? settingsWindow_ : mainWindow_,
+        L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(opened) <= 32) {
+        MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_,
+                    L"无法打开日志文件夹。请手动打开程序目录下的 logs 文件夹。",
+                    L"打开失败", MB_OK | MB_ICONWARNING);
+    }
+}
+
 void Application::ShowSettingsWindow() {
     if (windowModes_.IsHidden()) SetHidden(false);
     if (!settingsWindow_) {
@@ -2011,8 +2037,24 @@ void Application::CreateSettingsControls(HWND window) {
     SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"跟随系统"));
     SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"浅色"));
     SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"深色"));
-    y += Scale(44);
-    settingsControls_.diagnostics = CreateThemedButton(window, L"复制诊断信息", SettingsDiagnostics);
+    y += Scale(40);
+    heading(L"日志");
+    settingsControls_.logAutoClean = checkbox(
+        L"自动清理旧日志", SettingsLogAutoClean, y);
+    y += row;
+    label(L"日志保留时间", y);
+    settingsControls_.logRetention = combo(SettingsLogRetention, y, Scale(150));
+    for (const int days : {3, 7, 30}) {
+        const std::wstring text = std::to_wstring(days) + L" 天";
+        SendMessageW(settingsControls_.logRetention, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(text.c_str()));
+    }
+    y += row;
+    HWND logNote = CreateLabel(window,
+        L"日志与 config.ini 同级的 logs 文件夹；不记录网址、搜索词或 Cookie。");
+    MoveWindow(logNote, left, y, Scale(650), Scale(28), FALSE);
+    y += Scale(34);
+    settingsControls_.diagnostics = CreateThemedButton(window, L"打开日志文件夹", SettingsDiagnostics);
     MoveWindow(settingsControls_.diagnostics, fieldX, y, Scale(190), Scale(32), FALSE);
     settingsControls_.about = CreateThemedButton(window, L"关于 v1.4", SettingsAbout);
     MoveWindow(settingsControls_.about, fieldX + Scale(202), y, Scale(130), Scale(32), FALSE);
@@ -2060,6 +2102,9 @@ void Application::ReadSettingsControls() {
     state_.settings.holdPlaybackRate = ComboValue(settingsControls_.holdRate, old.holdPlaybackRate - 2) + 2;
     state_.settings.renderMode = static_cast<RenderMode>(ComboValue(settingsControls_.renderMode));
     state_.settings.themeMode = static_cast<ThemeMode>(ComboValue(settingsControls_.theme));
+    state_.settings.autoCleanLogs = IsChecked(settingsControls_.logAutoClean);
+    const int logIndex = ComboValue(settingsControls_.logRetention);
+    state_.settings.logRetentionDays = logIndex == 0 ? 3 : logIndex == 2 ? 30 : 7;
     state_.settings.Clamp();
     SetWindowTextW(settingsControls_.holeRefresh,
                    std::to_wstring(state_.settings.holeRefreshMs).c_str());
@@ -2092,6 +2137,14 @@ void Application::ReadSettingsControls() {
         windowModes_.IsWebFullscreen()) {
         HandleWebFullscreenChanged();
     }
+    if (old.autoCleanLogs != state_.settings.autoCleanLogs ||
+        old.logRetentionDays != state_.settings.logRetentionDays) {
+        logs_.Write("logs.retention.changed",
+            "enabled=" + std::to_string(state_.settings.autoCleanLogs ? 1 : 0) +
+            " days=" + std::to_string(state_.settings.logRetentionDays));
+        logs_.SetRetention(state_.settings.autoCleanLogs, state_.settings.logRetentionDays);
+    }
+    EnableWindow(settingsControls_.logRetention, state_.settings.autoCleanLogs ? TRUE : FALSE);
     SaveConfiguration();
     // WebView COM calls may pump new UI messages. Finish native controls and
     // persistence first so a subsequent edit cannot be overwritten by this one.
@@ -2128,6 +2181,11 @@ void Application::RefreshSettingsControls() {
     SelectComboValue(settingsControls_.holdRate, state_.settings.holdPlaybackRate - 2);
     SelectComboValue(settingsControls_.renderMode, static_cast<int>(state_.settings.renderMode));
     SelectComboValue(settingsControls_.theme, static_cast<int>(state_.settings.themeMode));
+    SetCheck(settingsControls_.logAutoClean, state_.settings.autoCleanLogs);
+    SelectComboValue(settingsControls_.logRetention,
+        state_.settings.logRetentionDays == 3 ? 0 :
+        state_.settings.logRetentionDays == 30 ? 2 : 1);
+    EnableWindow(settingsControls_.logRetention, state_.settings.autoCleanLogs ? TRUE : FALSE);
     for (size_t index = 0; index < kHotkeyCount; ++index) {
         SetWindowTextW(settingsControls_.hotkeys[index], HotkeyDisplayText(state_.hotkeys[index]).c_str());
         SetCheck(settingsControls_.hotkeyEnabled[index], state_.hotkeys[index].enabled);
@@ -2256,7 +2314,7 @@ LRESULT Application::HandleSettingsMessage(HWND window, UINT message, WPARAM wPa
             return 0;
         }
         if (id == SettingsDiagnostics) {
-            RequestMediaDiagnostics();
+            OpenLogFolder();
             return 0;
         }
         if (id == SettingsAbout) {
@@ -2647,6 +2705,8 @@ void Application::ResetToDefaults() {
     const ThemeMode retainedTheme = state_.settings.themeMode;
     const RenderMode retainedRender = state_.settings.renderMode;
     state_.settings = AppSettings{};
+    logs_.SetRetention(state_.settings.autoCleanLogs, state_.settings.logRetentionDays);
+    logs_.Write("settings.reset");
     webZoom_.Configure(state_.settings);
     state_.settings.themeMode = retainedTheme;
     state_.settings.renderMode = retainedRender;
