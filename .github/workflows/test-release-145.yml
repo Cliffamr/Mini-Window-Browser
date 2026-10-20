@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+# Never race two builds while replacing the same prerelease asset.
+concurrency:
+  group: one-updatable-145-test-release
+  cancel-in-progress: true
+
 jobs:
   windows-test-release:
     runs-on: windows-2025
@@ -39,7 +44,7 @@ jobs:
           Copy-Item '用户手册.md' (Join-Path $root 'README-使用说明.md')
           Copy-Item 'README-测试说明.md' $root
           Copy-Item 'CHANGELOG.md' $root
-          Copy-Item 'RELEASE_NOTES-1.4.5-test.1.md' $root
+          Copy-Item 'RELEASE_NOTES-1.4.5-test.2.md' $root
           Copy-Item '小窗吸附后按住Ctrl拖动.txt' $root
           Copy-Item '开启鼠标穿透和隐藏标题栏按0.txt' $root
           Copy-Item 'LICENSE.txt' $root
@@ -65,7 +70,29 @@ jobs:
         run: |
           $tag = 'v1.4.5-test.2'
           $zip = 'Mini-Window-Browser-v1.4.5-test.2-x64.zip'
-          gh release view $tag 2>$null
-          if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists, refusing to overwrite" }
-          gh release create $tag $zip --target "${{ github.sha }}" --title '小窗浏览器 v1.4.5-test.2｜可调挖孔刷新与白屏恢复测试' --notes-file 'RELEASE_NOTES-1.4.5-test.1.md' --prerelease
-          if ($LASTEXITCODE -ne 0) { throw 'Prerelease creation failed' }
+          # Keep ONE mutable test release URL and archive; only publish after
+          # Windows compilation and core tests have passed.
+          $notes = 'RELEASE_NOTES-1.4.5-test.2.md'
+          $release = gh release view $tag --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            # Update the source tag to match the new successful binary.
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -f $tag "${{ github.sha }}"
+            git push --force origin "refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to move the single test tag' }
+            gh release upload $tag $zip --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to replace test ZIP' }
+            gh release edit $tag --notes-file $notes --prerelease
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to update release notes' }
+          } else {
+            gh release create $tag $zip --target "${{ github.sha }}" --title '小窗浏览器 v1.4.5-test.2｜可调挖孔刷新与白屏恢复测试' --notes-file $notes --prerelease
+            if ($LASTEXITCODE -ne 0) { throw 'Prerelease creation failed' }
+          }
+          # The earlier test.1 was created in this same effort; retire it only
+          # after the replacement asset is available in the sole test.2 release.
+          $old = gh release view 'v1.4.5-test.1' --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete 'v1.4.5-test.1' --yes --cleanup-tag
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to retire superseded prerelease' }
+          }
