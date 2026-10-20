@@ -56,6 +56,7 @@ std::wstring BuildSystemDiagnostics(const AppState& state,
            << L"WindowMode: " << WindowModeText(windowMode) << L"\r\n"
            << L"Hole mode: fully transparent cursor hole (fixed)\r\n"
            << L"Hole refresh interval: " << state.settings.holeRefreshMs << L"ms\r\n"
+           << L"Blank page check delay: " << state.settings.blankPageCheckSeconds << L"s\r\n"
            << L"Auto-hide opacity: " << state.settings.autoHideOpacityPercent << L"%\r\n"
            << L"Hold rate: " << state.settings.holdPlaybackRate << L"x\r\n"
            << L"Fixed web zoom: " << (state.settings.fixedWebZoomEnabled ? L"enabled, " : L"disabled, ")
