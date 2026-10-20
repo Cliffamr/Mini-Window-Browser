@@ -4,6 +4,7 @@
 #include "ConfigStore.h"
 #include "HotkeyManager.h"
 #include "InputGuard.h"
+#include "LogStore.h"
 #include "ThemeManager.h"
 #include "WindowModeController.h"
 #include "WebViewZoom.h"
@@ -60,6 +61,8 @@ private:
         SettingsZoomPercent = 2021,
         SettingsHoleRefresh = 2022,
         SettingsBlankPageCheck = 2023,
+        SettingsLogAutoClean = 2024,
+        SettingsLogRetention = 2025,
         SettingsHotkeyBase = 2100,
         SettingsHotkeyEnabledBase = 2200,
 
@@ -136,6 +139,7 @@ private:
     void RecreateWebView();
     void RequestWebViewRecovery();
     void ProbeWebViewResponsiveness();
+    void OpenLogFolder();
     void CloseWebView();
 
     void CreateNewTab(const std::wstring& url, const std::wstring& title, bool activate);
@@ -253,6 +257,7 @@ private:
 
     AppState state_;
     ConfigStore config_;
+    LogStore logs_{config_.Path()};
     ThemeManager theme_;
     HotkeyManager hotkeys_;
     InputGuard inputGuard_;
@@ -298,6 +303,8 @@ private:
         HWND renderMode = nullptr;
         HWND theme = nullptr;
         HWND diagnostics = nullptr;
+        HWND logAutoClean = nullptr;
+        HWND logRetention = nullptr;
         HWND about = nullptr;
         HWND repository = nullptr;
         std::array<HWND, kHotkeyCount> hotkeys{};
