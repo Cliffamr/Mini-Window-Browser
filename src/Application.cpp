@@ -618,11 +618,40 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
             if (foregroundChanged) windowModes_.ReassertTopmost();
         }
         else if (wParam == kContentWaitTimerId) {
+            const bool timedOut = waitingForTabContent_;
             EndContentWait();
+            // The 5s watchdog only stops the loading indicator. A separate
+            // responsiveness probe decides whether the shared WebView needs
+            // recreation; slow but responsive pages must not be blindly reloaded.
+            const ULONGLONG now = GetTickCount64();
+            if (timedOut && webView_ && !windowModes_.IsHidden() &&
+                (lastContentRecoveryTick_ == 0 || now - lastContentRecoveryTick_ >= 60000)) {
+                const UINT64 generation = webViewGeneration_;
+                contentProbePending_ = true;
+                SetTimer(window, kContentProbeTimerId, 2000, nullptr);
+                webView_->ExecuteScript(L"0",
+                    Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                        [this, generation](HRESULT result, PCWSTR) -> HRESULT {
+                            if (!shuttingDown_ && generation == webViewGeneration_ &&
+                                contentProbePending_ && SUCCEEDED(result)) {
+                                contentProbePending_ = false;
+                                if (mainWindow_) KillTimer(mainWindow_, kContentProbeTimerId);
+                            }
+                            return S_OK;
+                        }).Get());
+            }
             if (state_.currentTabIndex >= 0 &&
                 state_.currentTabIndex < static_cast<int>(state_.tabs.size())) {
                 TabData& tab = state_.tabs[static_cast<size_t>(state_.currentTabIndex)];
                 if (IsPlaceholderTabTitle(tab.title)) UpdateCurrentTabTitle(SuggestedTitleForUrl(tab.url));
+            }
+        }
+        else if (wParam == kContentProbeTimerId) {
+            KillTimer(window, kContentProbeTimerId);
+            if (contentProbePending_ && !shuttingDown_ && !webViewRecoveryPending_) {
+                contentProbePending_ = false;
+                lastContentRecoveryTick_ = GetTickCount64();
+                webViewRecoveryPending_ = PostMessageW(window, kRecreateWebViewMessage, 0, 0) != FALSE;
             }
         }
         else if (wParam == kHotkeyRegistrationRetryTimerId) {
@@ -1262,7 +1291,11 @@ void Application::CloseWebView() {
     smokeNavigationComplete_ = false;
 #endif
     ++webViewGeneration_;
-    if (mainWindow_) KillTimer(mainWindow_, kContentWaitTimerId);
+    if (mainWindow_) {
+        KillTimer(mainWindow_, kContentWaitTimerId);
+        KillTimer(mainWindow_, kContentProbeTimerId);
+    }
+    contentProbePending_ = false;
     waitingForTabContent_ = false;
     waitingNavigationId_ = 0;
     contentWaitStartedAt_ = 0;
@@ -1532,6 +1565,9 @@ void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) 
                     L"无法打开地址", MB_OK | MB_ICONWARNING);
         return;
     }
+    // A user navigation supersedes any outstanding stalled-renderer probe.
+    if (mainWindow_) KillTimer(mainWindow_, kContentProbeTimerId);
+    contentProbePending_ = false;
     UpdateCurrentTabUrl(normalized);
     if (webView_) {
         if (concealUntilContent) {
