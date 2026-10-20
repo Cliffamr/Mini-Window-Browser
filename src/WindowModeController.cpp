@@ -318,6 +318,9 @@ void WindowModeController::RefreshVisualState() {
         holeOutsideWindow_ = false;
         SetLayeredWindowAttributes(window_, 0, ConfiguredAlpha(), LWA_ALPHA);
         OnImmersionTimer();
+        // SetTimer with the same ID updates the interval immediately when edited.
+        if (!hidden_) SetTimer(window_, kImmersionTimerId,
+                              static_cast<UINT>(std::clamp(settings_->holeRefreshMs, 10, 100)), nullptr);
     } else {
         SetLayeredWindowAttributes(window_, 0, hoverApplied_ ? 0 : ConfiguredAlpha(), LWA_ALPHA);
     }
@@ -399,7 +402,9 @@ void WindowModeController::ApplyVisibleMode(WindowMode mode, bool restoreGeometr
         // Restore the smooth ~60Hz hole tracking from v1.3. Auto-hide has a
         // separate hover debounce and does not need this higher frequency.
         SetTimer(window_, kImmersionTimerId,
-                 mode == WindowMode::ImmersionHole ? 16 : 50, nullptr);
+                 mode == WindowMode::ImmersionHole
+                     ? static_cast<UINT>(std::clamp(settings_->holeRefreshMs, 10, 100)) : 50U,
+                 nullptr);
     }
     RedrawWindow(window_, nullptr, nullptr,
                  RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
