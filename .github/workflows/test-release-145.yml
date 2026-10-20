@@ -45,6 +45,7 @@ jobs:
           # Keep developer smoke-test records and changelogs in GitHub; the ZIP
           # should contain only files ordinary users actually need.
           Copy-Item '开启鼠标穿透和隐藏标题栏按0.txt' $root
+          Copy-Item '小窗吸附后按住Ctrl拖动.txt' $root
           Copy-Item '长时间白屏时右键标签页重载.txt' $root
           Copy-Item 'LICENSE.txt' $root
           Copy-Item 'THIRD_PARTY_NOTICES.txt' $root
@@ -55,13 +56,15 @@ jobs:
           Copy-Item 'packages/Microsoft.Windows.ImplementationLibrary.1.0.250325.1/ThirdPartyNotices.txt' (Join-Path $root 'licenses/WIL-ThirdPartyNotices.txt')
           foreach ($hintName in @(
             '开启鼠标穿透和隐藏标题栏按0.txt',
+            '小窗吸附后按住Ctrl拖动.txt',
             '长时间白屏时右键标签页重载.txt')) {
             $hint = Get-Item (Join-Path $root $hintName)
             if ($hint.Length -ne 0) { throw "Reminder must be empty: $hintName" }
           }
           $expected = @(
             'XiaoChuang.exe', 'WebView2Loader.dll', 'README-使用说明.md',
-            '开启鼠标穿透和隐藏标题栏按0.txt', '长时间白屏时右键标签页重载.txt',
+            '开启鼠标穿透和隐藏标题栏按0.txt', '小窗吸附后按住Ctrl拖动.txt',
+            '长时间白屏时右键标签页重载.txt',
             'LICENSE.txt', 'THIRD_PARTY_NOTICES.txt', 'licenses')
           $actual = @(Get-ChildItem -LiteralPath $root | Select-Object -ExpandProperty Name)
           $unexpected = @($actual | Where-Object { $_ -notin $expected })
