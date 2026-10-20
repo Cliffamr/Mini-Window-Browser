@@ -95,6 +95,7 @@ private:
     static constexpr UINT_PTR kInputDebounceTimerId = 4405;
     static constexpr UINT_PTR kContentWaitTimerId = 4406;
     static constexpr UINT_PTR kContentProbeTimerId = 4408;
+    static constexpr UINT_PTR kContentHealthTimerId = 4409;
     static constexpr UINT_PTR kHotkeyRegistrationRetryTimerId = 4407;
     static constexpr int kTrayIconId = 1;
 
@@ -132,6 +133,8 @@ private:
     void HandleWebFullscreenChanged();
     void HandleProcessFailure(COREWEBVIEW2_PROCESS_FAILED_KIND kind);
     void RecreateWebView();
+    void RequestWebViewRecovery();
+    void ProbeWebViewResponsiveness();
     void CloseWebView();
 
     void CreateNewTab(const std::wstring& url, const std::wstring& title, bool activate);
@@ -306,6 +309,7 @@ private:
     bool updatingSettingsControls_ = false;
     bool waitingForTabContent_ = false;
     bool contentProbePending_ = false;
+    UINT64 contentProbeSerial_ = 0;
     ULONGLONG lastContentRecoveryTick_ = 0;
     UINT64 waitingNavigationId_ = 0;
     ULONGLONG contentWaitStartedAt_ = 0;
