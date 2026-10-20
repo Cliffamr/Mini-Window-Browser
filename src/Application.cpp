@@ -1922,12 +1922,21 @@ void Application::CreateSettingsControls(HWND window) {
     label(L"挖孔半径（像素）", y);
     settingsControls_.radius = edit(SettingsRadius, y, Scale(130));
     y += row;
-    label(L"挖孔刷新间隔（ms）", y);
+    // Keep the input aligned with other settings. The localized label must
+    // fit the common label column; show its unit next to the value instead.
+    label(L"挖孔刷新间隔", y);
     settingsControls_.holeRefresh = edit(SettingsHoleRefresh, y, Scale(130));
     SendMessageW(settingsControls_.holeRefresh, EM_SETLIMITTEXT, 3, 0);
-    HWND refreshNote = CreateLabel(window, L"10–100ms，默认16ms；越小跟随越快，资源开销可能越高");
-    MoveWindow(refreshNote, fieldX + Scale(140), y + Scale(4), Scale(380), Scale(26), FALSE);
+    HWND refreshUnit = CreateLabel(window, L"ms");
+    MoveWindow(refreshUnit, fieldX + Scale(140), y + Scale(5),
+               Scale(50), Scale(24), FALSE);
     y += row;
+    // A full-width, dedicated row prevents localization/DPI wrapping from
+    // overlapping the next setting (the old inline 380px label was too narrow).
+    HWND refreshNote = CreateLabel(window,
+        L"10–100ms，默认16ms。数值越小，跟随越快，资源开销可能增加。");
+    MoveWindow(refreshNote, left, y, Scale(650), Scale(28), FALSE);
+    y += Scale(34);
     label(L"吸附距离", y);
     settingsControls_.snap = edit(SettingsSnap, y, Scale(130));
     y += row;
