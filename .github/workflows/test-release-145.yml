@@ -2,7 +2,7 @@ name: Build v1.4.5 test release
 on:
   push:
     branches:
-      - codex/tab-white-hole-fps-145-rc1
+      - codex/hole-refresh-watchdog-145-test2
   workflow_dispatch:
 
 permissions:
@@ -30,7 +30,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $root = 'Mini-Window-Browser-v1.4.5-test.1-x64'
+          $root = 'Mini-Window-Browser-v1.4.5-test.2-x64'
           New-Item -ItemType Directory -Path $root | Out-Null
           Copy-Item 'x64/Release/XiaoChuang.exe' $root
           $loader = Get-ChildItem -Path 'x64/Release','packages/Microsoft.Web.WebView2.1.0.4078.44' -Filter WebView2Loader.dll -Recurse -File | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
@@ -41,6 +41,7 @@ jobs:
           Copy-Item 'CHANGELOG.md' $root
           Copy-Item 'RELEASE_NOTES-1.4.5-test.1.md' $root
           Copy-Item '小窗吸附后按住Ctrl拖动.txt' $root
+          Copy-Item '开启鼠标穿透和隐藏标题栏按0.txt' $root
           Copy-Item 'LICENSE.txt' $root
           Copy-Item 'THIRD_PARTY_NOTICES.txt' $root
           New-Item -ItemType Directory -Path (Join-Path $root 'licenses') | Out-Null
@@ -48,21 +49,23 @@ jobs:
           Copy-Item 'packages/Microsoft.Web.WebView2.1.0.4078.44/NOTICE.txt' (Join-Path $root 'licenses/WebView2-SDK-NOTICE.txt')
           Copy-Item 'packages/Microsoft.Windows.ImplementationLibrary.1.0.250325.1/LICENSE' (Join-Path $root 'licenses/WIL-LICENSE.txt')
           Copy-Item 'packages/Microsoft.Windows.ImplementationLibrary.1.0.250325.1/ThirdPartyNotices.txt' (Join-Path $root 'licenses/WIL-ThirdPartyNotices.txt')
+          $hint = Get-Item (Join-Path $root '开启鼠标穿透和隐藏标题栏按0.txt')
+          if ($hint.Length -ne 0) { throw 'Shortcut reminder must be an empty TXT file' }
           Compress-Archive -Path $root -DestinationPath "$root.zip"
           Get-FileHash "$root.zip" -Algorithm SHA256 | Format-List
       - uses: actions/upload-artifact@v4
         with:
-          name: Mini-Window-Browser-v1.4.5-test.1-x64
-          path: Mini-Window-Browser-v1.4.5-test.1-x64.zip
+          name: Mini-Window-Browser-v1.4.5-test.2-x64
+          path: Mini-Window-Browser-v1.4.5-test.2-x64.zip
           if-no-files-found: error
       - name: Publish prerelease
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'v1.4.5-test.1'
-          $zip = 'Mini-Window-Browser-v1.4.5-test.1-x64.zip'
+          $tag = 'v1.4.5-test.2'
+          $zip = 'Mini-Window-Browser-v1.4.5-test.2-x64.zip'
           gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists, refusing to overwrite" }
-          gh release create $tag $zip --target "${{ github.sha }}" --title '小窗浏览器 v1.4.5-test.1｜白屏和挖孔帧率测试' --notes-file 'RELEASE_NOTES-1.4.5-test.1.md' --prerelease
+          gh release create $tag $zip --target "${{ github.sha }}" --title '小窗浏览器 v1.4.5-test.2｜可调挖孔刷新与白屏恢复测试' --notes-file 'RELEASE_NOTES-1.4.5-test.1.md' --prerelease
           if ($LASTEXITCODE -ne 0) { throw 'Prerelease creation failed' }
