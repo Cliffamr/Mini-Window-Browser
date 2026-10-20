@@ -630,6 +630,12 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
             // not an automatic reload. A separate timer probes even when
             // ContentLoading arrived, because rendering can still be stuck.
             const bool timedOut = waitingForTabContent_;
+            if (timedOut) {
+                logs_.Write("navigation.wait_timeout",
+                    "generation=" + std::to_string(webViewGeneration_) +
+                    " elapsed_ms=" + std::to_string(GetTickCount64() - contentWaitStartedAt_) +
+                    " check_seconds=" + std::to_string(state_.settings.blankPageCheckSeconds));
+            }
             EndContentWait();
             if (timedOut && state_.currentTabIndex >= 0 &&
                 state_.currentTabIndex < static_cast<int>(state_.tabs.size())) {
@@ -639,6 +645,8 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
         }
         else if (wParam == kContentHealthTimerId) {
             KillTimer(window, kContentHealthTimerId);
+            logs_.Write("navigation.health_check_due",
+                "generation=" + std::to_string(webViewGeneration_));
             ProbeWebViewResponsiveness();
         }
         else if (wParam == kContentProbeTimerId) {
@@ -647,6 +655,9 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
                 contentProbePending_ = false;
                 ++contentProbeSerial_;
                 lastContentRecoveryTick_ = GetTickCount64();
+                logs_.Write("webview.probe.timeout",
+                    "generation=" + std::to_string(webViewGeneration_) +
+                    " serial=" + std::to_string(contentProbeSerial_));
                 RequestWebViewRecovery();
             }
         }
@@ -908,8 +919,12 @@ LRESULT CALLBACK Application::TabSubclassProc(HWND window, UINT message, WPARAM 
 void Application::InitializeWebView() {
     if (shuttingDown_) return;
     const UINT64 generation = ++webViewGeneration_;
+    logs_.Write("webview.environment.create_begin",
+        "generation=" + std::to_string(generation) +
+        " software=" + std::to_string(state_.settings.renderMode == RenderMode::SoftwareCompatibility ? 1 : 0));
     auto options = Make<CoreWebView2EnvironmentOptions>();
     if (!options) {
+        logs_.Write("webview.environment.options_failed");
         ShowError(L"WebView2 初始化失败", L"无法创建 WebView2 环境选项。");
         return;
     }
@@ -922,11 +937,15 @@ void Application::InitializeWebView() {
             [this, generation](HRESULT environmentResult, ICoreWebView2Environment* environment) -> HRESULT {
                 if (shuttingDown_ || generation != webViewGeneration_) return S_OK;
                 if (FAILED(environmentResult) || !environment) {
+                    logs_.Write("webview.environment.failed",
+                        "hr=" + std::to_string(static_cast<unsigned long>(environmentResult)));
                     ShowError(L"WebView2 初始化失败",
                               L"请安装或修复 Microsoft Edge WebView2 Runtime。", environmentResult);
                     return S_OK;
                 }
                 webViewEnvironment_ = environment;
+                logs_.Write("webview.environment.ready",
+                    "generation=" + std::to_string(generation));
                 wil::unique_cotaskmem_string version;
                 if (SUCCEEDED(environment->get_BrowserVersionString(&version)) && version) {
                     webViewVersion_ = version.get();
@@ -940,11 +959,16 @@ void Application::InitializeWebView() {
                                 return S_OK;
                             }
                             if (FAILED(controllerResult) || !controller) {
+                                logs_.Write("webview.controller.failed",
+                                    "hr=" + std::to_string(static_cast<unsigned long>(controllerResult)));
                                 ShowError(L"WebView2 初始化失败", L"无法创建网页视图。", controllerResult);
                                 return S_OK;
                             }
                             webViewController_ = controller;
+                            logs_.Write("webview.controller.ready",
+                                "generation=" + std::to_string(generation));
                             if (FAILED(controller->get_CoreWebView2(&webView_)) || !webView_) {
+                                logs_.Write("webview.interface.failed");
                                 ShowError(L"WebView2 初始化失败", L"无法取得网页视图接口。");
                                 return S_OK;
                             }
@@ -973,11 +997,16 @@ void Application::InitializeWebView() {
                                         if (FAILED(result)) {
                                             ShowError(L"媒体控制初始化失败", L"网页仍可浏览，请重启小窗后重试。", result);
                                         }
+                                        logs_.Write("webview.bootstrap.done",
+                                            "generation=" + std::to_string(generation) +
+                                            " hr=" + std::to_string(static_cast<unsigned long>(result)));
                                         webViewReady_ = true;
                                         FinishInitialNavigation();
                                         return S_OK;
                                     }).Get());
                             if (FAILED(scriptResult)) {
+                                logs_.Write("webview.bootstrap.submit_failed",
+                                    "hr=" + std::to_string(static_cast<unsigned long>(scriptResult)));
                                 ShowError(L"媒体控制初始化失败", L"网页仍可浏览，请重启小窗后重试。", scriptResult);
                                 webViewReady_ = true;
                                 FinishInitialNavigation();
@@ -985,11 +1014,15 @@ void Application::InitializeWebView() {
                             return S_OK;
                         }).Get());
                 if (FAILED(creationResult)) {
+                    logs_.Write("webview.controller.submit_failed",
+                        "hr=" + std::to_string(static_cast<unsigned long>(creationResult)));
                     ShowError(L"WebView2 初始化失败", L"无法创建网页视图。", creationResult);
                 }
                 return S_OK;
             }).Get());
     if (FAILED(result)) {
+        logs_.Write("webview.environment.submit_failed",
+            "hr=" + std::to_string(static_cast<unsigned long>(result)));
         ShowError(L"WebView2 初始化失败", L"无法启动 WebView2 环境。", result);
     }
 }
@@ -1004,9 +1037,15 @@ void Application::ConfigureWebViewEvents() {
 #endif
                 hotkeys_.CancelActiveGesture();
                 inputGuard_.SetWebTyping(false);
-                if (waitingForTabContent_ && args) {
-                    args->get_NavigationId(&waitingNavigationId_);
+                UINT64 navigationId = 0;
+                if (args) {
+                    args->get_NavigationId(&navigationId);
+                    if (waitingForTabContent_) waitingNavigationId_ = navigationId;
                 }
+                logs_.Write("navigation.start",
+                    "generation=" + std::to_string(webViewGeneration_) +
+                    " id=" + std::to_string(navigationId) +
+                    " tab=" + std::to_string(state_.currentTabIndex));
                 return S_OK;
             }).Get(), &navigationStartingToken_);
     webView_->add_ContentLoading(
@@ -1014,6 +1053,9 @@ void Application::ConfigureWebViewEvents() {
             [this](ICoreWebView2*, ICoreWebView2ContentLoadingEventArgs* args) -> HRESULT {
                 UINT64 navigationId = 0;
                 if (args) args->get_NavigationId(&navigationId);
+                logs_.Write("navigation.content_loading",
+                    "generation=" + std::to_string(webViewGeneration_) +
+                    " id=" + std::to_string(navigationId));
                 if (!waitingForTabContent_ ||
                     (waitingNavigationId_ != 0 && navigationId != waitingNavigationId_)) return S_OK;
                 EndContentWait();
@@ -1026,7 +1068,18 @@ void Application::ConfigureWebViewEvents() {
                 smokeNavigationComplete_ = true;
 #endif
                 UINT64 navigationId = 0;
-                if (args) args->get_NavigationId(&navigationId);
+                BOOL succeeded = FALSE;
+                COREWEBVIEW2_WEB_ERROR_STATUS errorStatus = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+                if (args) {
+                    args->get_NavigationId(&navigationId);
+                    args->get_IsSuccess(&succeeded);
+                    if (!succeeded) args->get_WebErrorStatus(&errorStatus);
+                }
+                logs_.Write("navigation.completed",
+                    "generation=" + std::to_string(webViewGeneration_) +
+                    " id=" + std::to_string(navigationId) +
+                    " success=" + std::to_string(succeeded ? 1 : 0) +
+                    " web_error=" + std::to_string(static_cast<int>(errorStatus)));
                 if (waitingForTabContent_ && waitingNavigationId_ != 0 &&
                     navigationId != waitingNavigationId_) return S_OK;
                 if (waitingForTabContent_) {
@@ -1256,10 +1309,14 @@ return width>0&&height>0?width/height:0})())JS";
 }
 
 void Application::HandleProcessFailure(COREWEBVIEW2_PROCESS_FAILED_KIND kind) {
+    logs_.Write("webview.process_failed",
+        "kind=" + std::to_string(static_cast<int>(kind)) +
+        " generation=" + std::to_string(webViewGeneration_));
     hotkeys_.CancelActiveGesture();
     EndContentWait();
     if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED ||
         kind == COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED) {
+        logs_.Write("webview.process_failed.reload_requested");
         if (webView_) webView_->Reload();
         return;
     }
@@ -1269,18 +1326,28 @@ void Application::HandleProcessFailure(COREWEBVIEW2_PROCESS_FAILED_KIND kind) {
 void Application::RequestWebViewRecovery() {
     if (shuttingDown_ || webViewRecoveryPending_ || !mainWindow_) return;
     webViewRecoveryPending_ = PostMessageW(mainWindow_, kRecreateWebViewMessage, 0, 0) != FALSE;
+    logs_.Write("webview.recovery.queued",
+        "posted=" + std::to_string(webViewRecoveryPending_ ? 1 : 0) +
+        " generation=" + std::to_string(webViewGeneration_));
 }
 
 void Application::ProbeWebViewResponsiveness() {
     if (shuttingDown_ || !webView_ || windowModes_.IsHidden() ||
         contentProbePending_ || webViewRecoveryPending_) return;
     const ULONGLONG now = GetTickCount64();
-    if (lastContentRecoveryTick_ != 0 && now - lastContentRecoveryTick_ < 60000) return;
+    if (lastContentRecoveryTick_ != 0 && now - lastContentRecoveryTick_ < 60000) {
+        logs_.Write("webview.probe.skipped_cooldown");
+        return;
+    }
 
     const UINT64 generation = webViewGeneration_;
     const UINT64 serial = ++contentProbeSerial_;
     contentProbePending_ = true;
+    logs_.Write("webview.probe.start",
+        "generation=" + std::to_string(generation) +
+        " serial=" + std::to_string(serial));
     if (!SetTimer(mainWindow_, kContentProbeTimerId, 2000, nullptr)) {
+        logs_.Write("webview.probe.timer_failed");
         contentProbePending_ = false;
         return;
     }
@@ -1290,6 +1357,9 @@ void Application::ProbeWebViewResponsiveness() {
                 if (!shuttingDown_ && generation == webViewGeneration_ &&
                     serial == contentProbeSerial_ && contentProbePending_ &&
                     SUCCEEDED(result)) {
+                    logs_.Write("webview.probe.ok",
+                        "generation=" + std::to_string(generation) +
+                        " serial=" + std::to_string(serial));
                     contentProbePending_ = false;
                     ++contentProbeSerial_;
                     if (mainWindow_) KillTimer(mainWindow_, kContentProbeTimerId);
@@ -1298,11 +1368,16 @@ void Application::ProbeWebViewResponsiveness() {
             }).Get());
     // A synchronous COM failure still gives the timeout path a chance to
     // recreate the renderer; do not turn transient errors into a UI dialog.
-    (void)hr;
+    if (FAILED(hr)) {
+        logs_.Write("webview.probe.submit_failed",
+            "hr=" + std::to_string(static_cast<unsigned long>(hr)));
+    }
 }
 
 void Application::RecreateWebView() {
     if (shuttingDown_) return;
+    logs_.Write("webview.recovery.begin",
+        "generation=" + std::to_string(webViewGeneration_));
     webViewRecoveryPending_ = false;
     hotkeys_.CancelActiveGesture();
     inputGuard_.SetWebTyping(false);
@@ -1315,6 +1390,7 @@ void Application::RecreateWebView() {
 }
 
 void Application::CloseWebView() {
+    logs_.Write("webview.close", "generation=" + std::to_string(webViewGeneration_));
 #ifdef XIAOCHUANG_SMOKE_TEST
     smokeNavigationComplete_ = false;
 #endif
@@ -1342,12 +1418,16 @@ void Application::CreateNewTab(const std::wstring& url, const std::wstring& titl
     const std::wstring targetTitle = IsPlaceholderTabTitle(title)
         ? SuggestedTitleForUrl(targetUrl) : title;
     state_.tabs.push_back({targetTitle, targetUrl});
+    logs_.Write("tabs.created", "count=" + std::to_string(state_.tabs.size()) +
+        " activate=" + std::to_string(activate ? 1 : 0));
     RebuildTabControl();
     if (activate) SwitchTab(static_cast<int>(state_.tabs.size()) - 1);
 }
 
 void Application::CloseTab(int index) {
     if (index < 0 || index >= static_cast<int>(state_.tabs.size())) return;
+    logs_.Write("tabs.close_requested", "index=" + std::to_string(index) +
+        " count=" + std::to_string(state_.tabs.size()));
     const bool closingCurrent = index == state_.currentTabIndex;
     if (state_.tabs.size() == 1) {
         state_.tabs[0] = {SuggestedTitleForUrl(state_.settings.homeUrl), state_.settings.homeUrl};
@@ -1389,6 +1469,8 @@ void Application::CloseAllTabs() {
 
 void Application::SwitchTab(int index) {
     if (index < 0 || index >= static_cast<int>(state_.tabs.size())) return;
+    logs_.Write("tabs.switch", "index=" + std::to_string(index) +
+        " count=" + std::to_string(state_.tabs.size()));
     state_.currentTabIndex = index;
     TabCtrl_SetCurSel(tabControl_, index);
     const TabData& tab = state_.tabs[static_cast<size_t>(index)];
@@ -1509,7 +1591,10 @@ void Application::ShowTabContextMenu(POINT screenPoint) {
     if (command == kCloseCurrentTabCommand) CloseTab(index);
     else if (command == kCloseOtherTabsCommand) CloseOtherTabs(index);
     else if (command == kCloseAllTabsCommand) CloseAllTabs();
-    else if (command == kRepairWebViewCommand) RequestWebViewRecovery();
+    else if (command == kRepairWebViewCommand) {
+        logs_.Write("webview.recovery.manual_requested");
+        RequestWebViewRecovery();
+    }
     PostMessageW(mainWindow_, WM_NULL, 0, 0);
 }
 
@@ -1594,6 +1679,7 @@ void Application::ShowBookmarkMenu() {
 void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) {
     const std::wstring normalized = NormalizeInputUrl(url);
     if (!IsSupportedWebNavigationUrl(normalized)) {
+        logs_.Write("navigation.unsupported_scheme");
         MessageBoxW(mainWindow_, L"仅支持 http、https、file 和 about:blank 地址。",
                     L"无法打开地址", MB_OK | MB_ICONWARNING);
         return;
@@ -1607,6 +1693,11 @@ void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) 
     contentProbePending_ = false;
     ++contentProbeSerial_;
     UpdateCurrentTabUrl(normalized);
+    logs_.Write("navigation.requested",
+        "generation=" + std::to_string(webViewGeneration_) +
+        " tab=" + std::to_string(state_.currentTabIndex) +
+        " check_seconds=" + std::to_string(state_.settings.blankPageCheckSeconds) +
+        " ready=" + std::to_string(webViewReady_ ? 1 : 0));
     if (webView_) {
         if (concealUntilContent) {
             if (windowModes_.IsWebFullscreen()) {
@@ -1623,6 +1714,8 @@ void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) 
         }
         const HRESULT result = webView_->Navigate(normalized.c_str());
         if (FAILED(result)) {
+            logs_.Write("navigation.submit_failed",
+                "hr=" + std::to_string(static_cast<unsigned long>(result)));
             EndContentWait();
             ShowError(L"导航失败", L"无法打开该地址。", result);
         }
@@ -1650,7 +1743,11 @@ void Application::EndContentWait() {
         const BOOL render = !windowModes_.IsHidden() || state_.settings.backgroundMediaHotkeys;
         webViewController_->put_IsVisible(render);
     }
-    if (wasWaiting && mainWindow_) InvalidateRect(mainWindow_, nullptr, FALSE);
+    if (wasWaiting) {
+        logs_.Write("navigation.wait_ended",
+            "generation=" + std::to_string(webViewGeneration_));
+        if (mainWindow_) InvalidateRect(mainWindow_, nullptr, FALSE);
+    }
 }
 
 void Application::ToggleHidden() {
@@ -2796,6 +2893,9 @@ void Application::SaveConfiguration() {
 }
 
 void Application::ApplyPreset(const Preset& preset) {
+    logs_.Write("preset.apply",
+        "tabs=" + std::to_string(preset.tabs.size()) +
+        " check_seconds=" + std::to_string(preset.blankPageCheckSeconds));
     const ThemeMode retainedTheme = state_.settings.themeMode;
     const RenderMode retainedRender = state_.settings.renderMode;
     state_.settings.holeRadius = preset.holeRadius;
