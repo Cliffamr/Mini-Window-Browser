@@ -263,6 +263,7 @@ private:
     bool extensionManagerOnly_ = false;
     bool extensionActionPending_ = false;
     bool extensionListPending_ = false;
+    bool extensionUiUpdating_ = false;
     HWND extensionWindow_ = nullptr;
     HWND extensionList_ = nullptr;
     HWND extensionToggle_ = nullptr;
