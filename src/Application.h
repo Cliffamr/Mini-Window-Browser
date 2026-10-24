@@ -238,6 +238,9 @@ private:
     int tabRowHeight_ = 40;
     int navigationRowHeight_ = 44;
     int chromeHeight_ = 84;
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    bool extensionSafeMode_ = false;
+#endif
     bool shuttingDown_ = false;
     bool webViewReady_ = false;
     bool webTyping_ = false;
