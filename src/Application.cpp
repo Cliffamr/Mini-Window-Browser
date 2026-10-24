@@ -817,6 +817,12 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
         return 0;
     }
     case kShowExistingInstance:
+#ifdef XIAOCHUANG_EXTENSION_LAB
+        if (extensionManagerOnly_) {
+            ShowExtensionsWindow();
+            return 0;
+        }
+#endif
         RestoreFromUserAction();
         return 0;
 #ifdef XIAOCHUANG_SMOKE_TEST
@@ -2995,7 +3001,7 @@ LRESULT Application::HandleSettingsMessage(HWND window, UINT message, WPARAM wPa
         if (id == SettingsAbout) {
             MessageBoxW(window,
 #ifdef XIAOCHUANG_EXTENSION_LAB
-                L"小窗浏览器 扩展实验版（未发布）\n\n"
+                L"小窗浏览器 v1.4.6-extensions-lab（实验版）\n\n"
 #else
                 L"小窗浏览器 v1.4.5\n\n"
 #endif
