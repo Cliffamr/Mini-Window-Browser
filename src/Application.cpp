@@ -41,6 +41,12 @@ constexpr wchar_t kSettingsWindowClass[] = L"XiaoChuangSettingsV14Smoke";
 constexpr wchar_t kBookmarkWindowClass[] = L"XiaoChuangBookmarksV14Smoke";
 constexpr wchar_t kPresetWindowClass[] = L"XiaoChuangPresetsV14Smoke";
 constexpr wchar_t kSingleInstanceName[] = L"MiniWindowBrowser-v1.4-SmokeTest-SingleInstance";
+#elif defined(XIAOCHUANG_EXTENSION_LAB)
+constexpr wchar_t kMainWindowClass[] = L"XiaoChuangExtensionsLabMain";
+constexpr wchar_t kSettingsWindowClass[] = L"XiaoChuangExtensionsLabSettings";
+constexpr wchar_t kBookmarkWindowClass[] = L"XiaoChuangExtensionsLabBookmarks";
+constexpr wchar_t kPresetWindowClass[] = L"XiaoChuangExtensionsLabPresets";
+constexpr wchar_t kSingleInstanceName[] = L"MiniWindowBrowser-ExtensionsLab-SingleInstance";
 #else
 constexpr wchar_t kMainWindowClass[] = L"XiaoChuangMainWindowV14";
 constexpr wchar_t kSettingsWindowClass[] = L"XiaoChuangSettingsV14";
@@ -117,6 +123,32 @@ void ApplyThemeToWindowTree(HWND window, bool useDark) {
 } // namespace
 
 int Application::Run(HINSTANCE instance, int showCommand) {
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv) {
+        for (int i = 1; i < argc; ++i) {
+            if (_wcsicmp(argv[i], L"--extensions-safe-mode") == 0)
+                extensionSafeMode_ = true;
+        }
+        LocalFree(argv);
+    }
+    // AsInvoker does not prevent inheriting an elevated token from a parent.
+    // Fail closed: untrusted extensions must never run inside an elevated host.
+    HANDLE token = nullptr;
+    TOKEN_ELEVATION elevation{};
+    DWORD resultSize = 0;
+    const BOOL tokenOpened = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token);
+    const BOOL tokenRead = tokenOpened &&
+        GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &resultSize);
+    if (token) CloseHandle(token);
+    if (!tokenRead || elevation.TokenIsElevated) {
+        MessageBoxW(nullptr,
+            L"扩展实验版必须以普通用户权限运行。\n请关闭管理员 PowerShell/终端，直接在文件资源管理器中双击启动。\n正式版不受影响。",
+            L"小窗扩展实验版 · 权限保护", MB_OK | MB_ICONWARNING);
+        return 2;
+    }
+#endif
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
@@ -155,6 +187,14 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
     singleInstanceMutex_ = CreateMutexW(nullptr, TRUE, kSingleInstanceName);
     if (!singleInstanceMutex_) return false;
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
+#ifdef XIAOCHUANG_EXTENSION_LAB
+        if (extensionSafeMode_) {
+            MessageBoxW(nullptr,
+                L"扩展实验版正在运行，安全模式不能附着到原有进程。\n请先退出扩展实验版（必要时从任务管理器结束实验版进程），然后再次双击安全模式启动脚本。\n此操作不会删除扩展或配置。",
+                L"安全模式需要独立启动", MB_OK | MB_ICONWARNING);
+            return false;
+        }
+#endif
         if (HWND existing = FindWindowW(kMainWindowClass, nullptr)) {
             PostMessageW(existing, kShowExistingInstance, 0, 0);
         }
@@ -163,6 +203,10 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
 
     config_.Load(state_);
     logs_.SetRetention(state_.settings.autoCleanLogs, state_.settings.logRetentionDays);
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    logs_.Write("extensions_lab.start",
+        std::string("safe_mode=") + (extensionSafeMode_ ? "1" : "0"));
+#endif
     logs_.Write("application.start",
         "tabs=" + std::to_string(state_.tabs.size()) +
         " auto_cleanup=" + std::to_string(state_.settings.autoCleanLogs ? 1 : 0) +
@@ -188,7 +232,12 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
                                                 24, 24, LR_DEFAULTCOLOR));
     const RECT initial = state_.session.normalRect;
     mainWindow_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_APPWINDOW, kMainWindowClass,
-        L"小窗浏览器", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+#ifdef XIAOCHUANG_EXTENSION_LAB
+        extensionSafeMode_ ? L"小窗扩展实验版 · 安全模式" : L"小窗扩展实验版",
+#else
+        L"小窗浏览器",
+#endif
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         initial.left, initial.top, initial.right - initial.left, initial.bottom - initial.top,
         nullptr, nullptr, instance_, this);
     if (!mainWindow_) {
@@ -936,8 +985,39 @@ void Application::InitializeWebView() {
     if (state_.settings.renderMode == RenderMode::SoftwareCompatibility) {
         options->put_AdditionalBrowserArguments(L"--disable-gpu");
     }
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    Microsoft::WRL::ComPtr<ICoreWebView2EnvironmentOptions6> extensionsOptions;
+    const HRESULT optionsHr = options.As(&extensionsOptions);
+    if (FAILED(optionsHr) || !extensionsOptions) {
+        logs_.Write("extensions_lab.options_unavailable",
+            "hr=" + std::to_string(static_cast<unsigned long>(optionsHr)));
+        ShowError(L"扩展实验版启动失败", L"WebView2 SDK 不支持浏览器扩展选项。", optionsHr);
+        return;
+    }
+    // Test-only opt-in in a separate profile; safe mode always overrides it.
+    const bool enabled = !extensionSafeMode_ &&
+        GetPrivateProfileIntW(L"ExtensionsLab", L"Enabled", 0, config_.Path().c_str()) != 0;
+    const HRESULT enabledHr = extensionsOptions->put_AreBrowserExtensionsEnabled(
+        enabled ? TRUE : FALSE);
+    if (FAILED(enabledHr)) {
+        logs_.Write("extensions_lab.enable_failed",
+            "hr=" + std::to_string(static_cast<unsigned long>(enabledHr)));
+        ShowError(L"扩展实验版启动失败", L"无法设置扩展启用状态。", enabledHr);
+        return;
+    }
+    logs_.Write("extensions_lab.environment_options",
+        std::string("safe_mode=") + (extensionSafeMode_ ? "1" : "0") +
+        " extensions_enabled=" + (enabled ? "1" : "0"));
+    const auto labUserData = (config_.Path().parent_path() / L"WebView2").wstring();
+#endif
     const HRESULT result = CreateCoreWebView2EnvironmentWithOptions(
-        nullptr, nullptr, options.Get(),
+        nullptr,
+#ifdef XIAOCHUANG_EXTENSION_LAB
+        labUserData.c_str(),
+#else
+        nullptr,
+#endif
+        options.Get(),
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [this, generation](HRESULT environmentResult, ICoreWebView2Environment* environment) -> HRESULT {
                 if (shuttingDown_ || generation != webViewGeneration_) return S_OK;
@@ -1500,7 +1580,12 @@ void Application::UpdateCurrentTabTitle(const std::wstring& title) {
     std::wstring display = FormatTabTitle(resolvedTitle);
     item.pszText = display.data();
     TabCtrl_SetItem(tabControl_, state_.currentTabIndex, &item);
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    SetWindowTextW(mainWindow_, (resolvedTitle +
+        (extensionSafeMode_ ? L" - 小窗扩展实验版 [安全模式]" : L" - 小窗扩展实验版")).c_str());
+#else
     SetWindowTextW(mainWindow_, (resolvedTitle + L" - 小窗浏览器").c_str());
+#endif
 }
 
 void Application::UpdateCurrentTabUrl(const std::wstring& url) {
@@ -2421,7 +2506,11 @@ LRESULT Application::HandleSettingsMessage(HWND window, UINT message, WPARAM wPa
         }
         if (id == SettingsAbout) {
             MessageBoxW(window,
+#ifdef XIAOCHUANG_EXTENSION_LAB
+                L"小窗浏览器 扩展实验版（未发布）\n\n"
+#else
                 L"小窗浏览器 v1.4.5\n\n"
+#endif
                 L"专为单屏玩家打造的 Windows 画中画浏览器\n"
                 L"C++20 / Win32 / WebView2 1.0.4078.44\n\n"
                 L"https://github.com/azurplain/Mini-Window-Browser",
