@@ -21,7 +21,9 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <memory>
+#include <regex>
 #include <sstream>
 #include <vector>
 
@@ -43,6 +45,9 @@ constexpr wchar_t kPresetWindowClass[] = L"XiaoChuangPresetsV14Smoke";
 constexpr wchar_t kSingleInstanceName[] = L"MiniWindowBrowser-v1.4-SmokeTest-SingleInstance";
 #elif defined(XIAOCHUANG_EXTENSION_LAB)
 constexpr wchar_t kMainWindowClass[] = L"XiaoChuangExtensionsLabMain";
+constexpr wchar_t kExtensionsManagerHostClass[] = L"XiaoChuangExtensionsLabManagerHost";
+constexpr wchar_t kExtensionsWindowClass[] = L"XiaoChuangExtensionsLabExtensions";
+constexpr wchar_t kManagerMutex[] = L"MiniWindowBrowser-ExtensionsLab-Manager-SingleInstance";
 constexpr wchar_t kSettingsWindowClass[] = L"XiaoChuangExtensionsLabSettings";
 constexpr wchar_t kBookmarkWindowClass[] = L"XiaoChuangExtensionsLabBookmarks";
 constexpr wchar_t kPresetWindowClass[] = L"XiaoChuangExtensionsLabPresets";
@@ -130,6 +135,8 @@ int Application::Run(HINSTANCE instance, int showCommand) {
         for (int i = 1; i < argc; ++i) {
             if (_wcsicmp(argv[i], L"--extensions-safe-mode") == 0)
                 extensionSafeMode_ = true;
+            if (_wcsicmp(argv[i], L"--extensions-manager") == 0)
+                extensionManagerOnly_ = true;
         }
         LocalFree(argv);
     }
@@ -173,7 +180,11 @@ int Application::Run(HINSTANCE instance, int showCommand) {
                 IsDialogMessageW(dialog, &message);
         };
         if (dispatchDialog(settingsWindow_) || dispatchDialog(bookmarkWindow_) ||
-            dispatchDialog(presetWindow_)) continue;
+            dispatchDialog(presetWindow_)
+#ifdef XIAOCHUANG_EXTENSION_LAB
+            || dispatchDialog(extensionWindow_)
+#endif
+            ) continue;
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
@@ -184,7 +195,12 @@ int Application::Run(HINSTANCE instance, int showCommand) {
 
 bool Application::Initialize(HINSTANCE instance, int showCommand) {
     instance_ = instance;
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    singleInstanceMutex_ = CreateMutexW(nullptr, TRUE,
+        extensionManagerOnly_ ? kManagerMutex : kSingleInstanceName);
+#else
     singleInstanceMutex_ = CreateMutexW(nullptr, TRUE, kSingleInstanceName);
+#endif
     if (!singleInstanceMutex_) return false;
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
 #ifdef XIAOCHUANG_EXTENSION_LAB
@@ -195,7 +211,13 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
             return false;
         }
 #endif
-        if (HWND existing = FindWindowW(kMainWindowClass, nullptr)) {
+        if (HWND existing = FindWindowW(
+#ifdef XIAOCHUANG_EXTENSION_LAB
+            extensionManagerOnly_ ? kExtensionsManagerHostClass : kMainWindowClass,
+#else
+            kMainWindowClass,
+#endif
+            nullptr)) {
             PostMessageW(existing, kShowExistingInstance, 0, 0);
         }
         return false;
@@ -231,7 +253,12 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
     smallIcon_ = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_SMALL), IMAGE_ICON,
                                                 24, 24, LR_DEFAULTCOLOR));
     const RECT initial = state_.session.normalRect;
-    mainWindow_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_APPWINDOW, kMainWindowClass,
+    mainWindow_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_APPWINDOW,
+#ifdef XIAOCHUANG_EXTENSION_LAB
+        extensionManagerOnly_ ? kExtensionsManagerHostClass : kMainWindowClass,
+#else
+        kMainWindowClass,
+#endif
 #ifdef XIAOCHUANG_EXTENSION_LAB
         extensionSafeMode_ ? L"小窗扩展实验版 · 安全模式" : L"小窗扩展实验版",
 #else
@@ -247,6 +274,13 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
     if (largeIcon_) SendMessageW(mainWindow_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(largeIcon_));
     if (smallIcon_) SendMessageW(mainWindow_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(smallIcon_));
 
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    if (extensionManagerOnly_) {
+        InitializeWebView();
+        ShowExtensionsWindow();
+        return true;
+    }
+#endif
     windowModes_.Initialize(mainWindow_, &state_.settings, state_.session.normalRect,
         state_.session.maximized, chromeHeight_,
         [this](bool visible) { ShowChrome(visible); },
@@ -316,6 +350,13 @@ void Application::RegisterWindowClasses() {
     popupClass.lpszClassName = kPresetWindowClass;
     popupClass.lpfnWndProc = PresetWindowProc;
     RegisterClassExW(&popupClass);
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    popupClass.lpszClassName = kExtensionsWindowClass;
+    popupClass.lpfnWndProc = ExtensionsWindowProc;
+    RegisterClassExW(&popupClass);
+    mainClass.lpszClassName = kExtensionsManagerHostClass;
+    RegisterClassExW(&mainClass);
+#endif
 }
 
 void Application::CreateMainControls() {
@@ -339,10 +380,16 @@ void Application::CreateMainControls() {
     bookmarkButton_ = CreateThemedButton(mainWindow_, L"书签", Bookmarks);
     presetButton_ = CreateThemedButton(mainWindow_, L"预设", Presets);
     settingsButton_ = CreateThemedButton(mainWindow_, L"设置", Settings);
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    extensionButton_ = CreateThemedButton(mainWindow_, L"扩展", ExtensionsButton);
+#endif
 
     const HWND controls[] = {addressEdit_, tabControl_, goButton_, addTabButton_, minimizeButton_,
         maximizeButton_, closeButton_, starButton_, bookmarkButton_, presetButton_, settingsButton_};
     for (HWND control : controls) SetControlFont(control);
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    SetControlFont(extensionButton_);
+#endif
     RebuildTabControl();
 }
 
@@ -393,14 +440,25 @@ void Application::LayoutMainControls() {
             ShowWindow(button, compact ? SW_HIDE : SW_SHOWNA);
         }
         ShowWindow(goButton_, SW_SHOWNA);
+#ifdef XIAOCHUANG_EXTENSION_LAB
+        ShowWindow(extensionButton_, SW_SHOWNA);
+#endif
         if (compact) {
             const int compactMargin = Scale(4);
             const int compactGoWidth = Scale(38);
             const int goX = std::max(compactMargin, width - compactMargin - compactGoWidth);
+#ifdef XIAOCHUANG_EXTENSION_LAB
+            MoveWindow(extensionButton_, std::max(compactMargin, goX - Scale(56)),
+                       navigationY + Scale(4), Scale(52), navigationButtonHeight, TRUE);
+#endif
             MoveWindow(goButton_, goX, navigationY + Scale(4), compactGoWidth,
                        navigationButtonHeight, TRUE);
             MoveWindow(addressEdit_, compactMargin, navigationY + Scale(7),
-                       std::max(1, goX - compactMargin - Scale(4)),
+                       std::max(1, goX - compactMargin - Scale(4)
+#ifdef XIAOCHUANG_EXTENSION_LAB
+                            - Scale(56)
+#endif
+                            ),
                        navigationRowHeight_ - Scale(14), TRUE);
         } else {
             int xRight = width - margin;
@@ -414,6 +472,9 @@ void Application::LayoutMainControls() {
             placeRight(presetButton_, textWidth);
             placeRight(bookmarkButton_, textWidth);
             placeRight(starButton_, smallWidth);
+#ifdef XIAOCHUANG_EXTENSION_LAB
+            placeRight(extensionButton_, Scale(58));
+#endif
             placeRight(goButton_, textWidth);
             const int addressWidth = std::max(Scale(120), xRight - margin);
             MoveWindow(addressEdit_, margin + Scale(9), navigationY + Scale(7),
@@ -431,6 +492,9 @@ void Application::ShowChrome(bool visible) {
     for (HWND control : controls) {
         if (control) ShowWindow(control, visible ? SW_SHOWNA : SW_HIDE);
     }
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    if (extensionButton_) ShowWindow(extensionButton_, visible ? SW_SHOWNA : SW_HIDE);
+#endif
 }
 
 void Application::ApplyThemeToAllWindows() {
@@ -524,6 +588,9 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
         const HWND controls[] = {addressEdit_, tabControl_, goButton_, addTabButton_, minimizeButton_,
             maximizeButton_, closeButton_, starButton_, bookmarkButton_, presetButton_, settingsButton_};
         for (HWND control : controls) SetControlFont(control);
+#ifdef XIAOCHUANG_EXTENSION_LAB
+        SetControlFont(extensionButton_);
+#endif
         LayoutMainControls();
         return 0;
     }
@@ -558,6 +625,9 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
         else if (id == Bookmarks) ShowBookmarkMenu();
         else if (id == Presets) ShowPresetWindow();
         else if (id == Settings) ShowSettingsWindow();
+#ifdef XIAOCHUANG_EXTENSION_LAB
+        else if (id == ExtensionsButton) ShowExtensionsWindow();
+#endif
         return 0;
     }
     case WM_NOTIFY: {
@@ -995,8 +1065,7 @@ void Application::InitializeWebView() {
         return;
     }
     // Test-only opt-in in a separate profile; safe mode always overrides it.
-    const bool enabled = !extensionSafeMode_ &&
-        GetPrivateProfileIntW(L"ExtensionsLab", L"Enabled", 0, config_.Path().c_str()) != 0;
+    const bool enabled = !extensionSafeMode_;
     const HRESULT enabledHr = extensionsOptions->put_AreBrowserExtensionsEnabled(
         enabled ? TRUE : FALSE);
     if (FAILED(enabledHr)) {
@@ -1066,6 +1135,14 @@ void Application::InitializeWebView() {
                                 settings->put_AreDevToolsEnabled(TRUE);
                                 settings->put_IsStatusBarEnabled(FALSE);
                             }
+#ifdef XIAOCHUANG_EXTENSION_LAB
+                            if (extensionWindow_) RefreshExtensions();
+                            if (extensionManagerOnly_) {
+                                webViewController_->put_IsVisible(FALSE);
+                                ShowExtensionsWindow();
+                                return S_OK;
+                            }
+#endif
                             ConfigureWebViewEvents();
                             const HRESULT zoomResult = webZoom_.Attach(controller, webView_.get());
                             if (FAILED(zoomResult)) {
@@ -1264,6 +1341,9 @@ void Application::ConfigureWebViewEvents() {
 
 void Application::FinishInitialNavigation() {
     if (!webView_) return;
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    if (extensionManagerOnly_) { ShowExtensionsWindow(); return; }
+#endif
     if (state_.tabs.empty()) {
         state_.tabs.push_back({SuggestedTitleForUrl(state_.settings.homeUrl), state_.settings.homeUrl});
     }
@@ -1476,6 +1556,9 @@ void Application::RecreateWebView() {
 
 void Application::CloseWebView() {
     logs_.Write("webview.close", "generation=" + std::to_string(webViewGeneration_));
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    extensions_.clear();
+#endif
 #ifdef XIAOCHUANG_SMOKE_TEST
     smokeNavigationComplete_ = false;
 #endif
