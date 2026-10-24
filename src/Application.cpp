@@ -309,7 +309,11 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
 
 void Application::Shutdown() {
     if (shuttingDown_) return;
+#ifdef XIAOCHUANG_EXTENSION_LAB
+    if (!extensionManagerOnly_) SaveConfiguration();
+#else
     SaveConfiguration();
+#endif
     logs_.Write("application.shutdown", "tabs=" + std::to_string(state_.tabs.size()));
     shuttingDown_ = true;
     hotkeys_.Stop();
@@ -868,7 +872,11 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
         return 0;
     case WM_DESTROY:
         KillTimer(window, kInputFallbackTimerId);
+#ifdef XIAOCHUANG_EXTENSION_LAB
+        if (!extensionManagerOnly_) SaveConfiguration();
+#else
         SaveConfiguration();
+#endif
         PostQuitMessage(0);
         return 0;
     default:
