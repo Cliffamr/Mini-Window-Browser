@@ -75,6 +75,9 @@
     <ClCompile>
       <PreprocessorDefinitions>XIAOCHUANG_EXTENSION_LAB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>XIAOCHUANG_EXTENSION_LAB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(SmokeTestAsInvoker)'=='true'">
     <ClCompile>
