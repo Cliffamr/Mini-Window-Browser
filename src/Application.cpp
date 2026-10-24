@@ -381,7 +381,7 @@ void Application::CreateMainControls() {
     presetButton_ = CreateThemedButton(mainWindow_, L"预设", Presets);
     settingsButton_ = CreateThemedButton(mainWindow_, L"设置", Settings);
 #ifdef XIAOCHUANG_EXTENSION_LAB
-    extensionButton_ = CreateThemedButton(mainWindow_, L"扩展", ExtensionsButton);
+    extensionButton_ = CreateThemedButton(mainWindow_, L"🧩", ExtensionsButton);
 #endif
 
     const HWND controls[] = {addressEdit_, tabControl_, goButton_, addTabButton_, minimizeButton_,
@@ -1094,15 +1094,19 @@ LRESULT Application::HandleExtensionsMessage(HWND window, UINT msg, WPARAM wp, L
         extensionList_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
             style | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
             0, 0, 0, 0, window, reinterpret_cast<HMENU>(ExtensionsList), instance_, nullptr);
-        ListView_SetExtendedListViewStyle(extensionList_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+        ListView_SetExtendedListViewStyle(extensionList_,
+            LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_CHECKBOXES);
         LVCOLUMNW column{};
         column.mask = LVCF_TEXT | LVCF_WIDTH;
-        column.cx = Scale(380);
+        column.cx = Scale(340);
         column.pszText = const_cast<LPWSTR>(L"扩展名称");
         ListView_InsertColumn(extensionList_, 0, &column);
-        column.cx = Scale(180);
-        column.pszText = const_cast<LPWSTR>(L"状态");
+        column.cx = Scale(120);
+        column.pszText = const_cast<LPWSTR>(L"状态 · 勾选启用");
         ListView_InsertColumn(extensionList_, 1, &column);
+        column.cx = Scale(75);
+        column.pszText = const_cast<LPWSTR>(L"操作");
+        ListView_InsertColumn(extensionList_, 2, &column);
         extensionImport_ = CreateWindowExW(0, L"BUTTON", L"安装本地扩展",
             style | BS_PUSHBUTTON, 0, 0, 0, 0, window,
             reinterpret_cast<HMENU>(ExtensionsImport), instance_, nullptr);
@@ -1133,6 +1137,31 @@ LRESULT Application::HandleExtensionsMessage(HWND window, UINT msg, WPARAM wp, L
             {extensionRemove_, 80}, {extensionRefresh_, 95}}) {
             MoveWindow(item.first, x, y, Scale(item.second), row, TRUE);
             x += Scale(item.second) + gap;
+        }
+        return 0;
+    }
+    case WM_NOTIFY: {
+        const auto* header = reinterpret_cast<const NMHDR*>(lp);
+        if (!header || header->idFrom != ExtensionsList || extensionUiUpdating_) break;
+        if (header->code == LVN_ITEMCHANGED) {
+            const auto* n = reinterpret_cast<const NMLISTVIEW*>(lp);
+            if (n->iItem >= 0 && static_cast<size_t>(n->iItem) < extensions_.size() &&
+                (n->uChanged & LVIF_STATE) &&
+                ((n->uOldState ^ n->uNewState) & LVIS_STATEIMAGEMASK)) {
+                BOOL actual = FALSE;
+                const auto ext = extensions_[static_cast<size_t>(n->iItem)];
+                if (SUCCEEDED(ext->get_IsEnabled(&actual)) &&
+                    (ListView_GetCheckState(extensionList_, n->iItem) != (actual != FALSE))) {
+                    ListView_SetItemState(extensionList_, n->iItem, LVIS_SELECTED, LVIS_SELECTED);
+                    ToggleExtension();
+                }
+            }
+        } else if (header->code == NM_CLICK) {
+            const auto* hit = reinterpret_cast<const NMITEMACTIVATE*>(lp);
+            if (hit->iItem >= 0 && hit->iSubItem == 2) {
+                ListView_SetItemState(extensionList_, hit->iItem, LVIS_SELECTED, LVIS_SELECTED);
+                RemoveExtension();
+            }
         }
         return 0;
     }
@@ -1190,6 +1219,7 @@ void Application::RefreshExtensions() {
                     return S_OK;
                 }
                 const int chosen = ListView_GetNextItem(extensionList_, -1, LVNI_SELECTED);
+                extensionUiUpdating_ = true;
                 ListView_DeleteAllItems(extensionList_);
                 extensions_.clear();
                 UINT32 count = 0;
@@ -1209,12 +1239,16 @@ void Application::RefreshExtensions() {
                     const int idx = ListView_InsertItem(extensionList_, &item);
                     std::wstring state = enabled ? L"已启用" : L"已停用";
                     ListView_SetItemText(extensionList_, idx, 1, state.data());
+                    std::wstring deleteText = L"删除";
+                    ListView_SetItemText(extensionList_, idx, 2, deleteText.data());
+                    ListView_SetCheckState(extensionList_, idx, enabled != FALSE);
                     extensions_.push_back(std::move(ext));
                 }
                 if (!extensions_.empty()) {
                     const int selected = std::clamp(chosen, 0, static_cast<int>(extensions_.size()) - 1);
                     ListView_SetItemState(extensionList_, selected, LVIS_SELECTED, LVIS_SELECTED);
                 }
+                extensionUiUpdating_ = false;
                 logs_.Write("extensions_lab.list", "count=" + std::to_string(extensions_.size()));
                 return S_OK;
             }).Get());
@@ -1302,6 +1336,14 @@ void Application::InstallExtension() {
         Callback<ICoreWebView2ProfileAddBrowserExtensionCompletedHandler>(
             [this, destination](HRESULT result, ICoreWebView2BrowserExtension* ext) -> HRESULT {
                 extensionActionPending_ = false;
+                if (SUCCEEDED(result) && ext) {
+                    wil::unique_cotaskmem_string id;
+                    if (SUCCEEDED(ext->get_Id(&id)) && id) {
+                        const auto inventory = config_.Path().parent_path() / L"extension-sources.ini";
+                        WritePrivateProfileStringW(L"Sources", id.get(),
+                            destination.filename().c_str(), inventory.c_str());
+                    }
+                }
                 logs_.Write(SUCCEEDED(result) ? "extensions_lab.install_ok" : "extensions_lab.install_failed",
                     "hr=" + std::to_string(static_cast<unsigned long>(result)));
                 if (FAILED(result) || !ext) {
@@ -1355,11 +1397,32 @@ void Application::RemoveExtension() {
     if (MessageBoxW(extensionWindow_, L"确定从此浏览器 Profile 中删除选中的扩展？",
                     L"删除扩展", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
     const auto ext = extensions_[static_cast<size_t>(selected)];
+    wil::unique_cotaskmem_string id;
+    ext->get_Id(&id);
+    const std::wstring extensionId = id ? id.get() : L"";
     extensionActionPending_ = true;
     const HRESULT hr = ext->Remove(
         Callback<ICoreWebView2BrowserExtensionRemoveCompletedHandler>(
-            [this](HRESULT result) -> HRESULT {
+            [this, extensionId](HRESULT result) -> HRESULT {
                 extensionActionPending_ = false;
+                if (SUCCEEDED(result) && !extensionId.empty()) {
+                    const auto inventory = config_.Path().parent_path() / L"extension-sources.ini";
+                    wchar_t stored[128]{};
+                    GetPrivateProfileStringW(L"Sources", extensionId.c_str(), L"",
+                        stored, static_cast<DWORD>(std::size(stored)), inventory.c_str());
+                    const std::wstring folder(stored);
+                    const bool valid = folder.size() == 36 &&
+                        folder.find_first_not_of(L"0123456789abcdefABCDEF-") == std::wstring::npos;
+                    if (valid) {
+                        const auto base = config_.Path().parent_path() / L"installed";
+                        std::error_code error;
+                        if (!std::filesystem::is_symlink(std::filesystem::symlink_status(base, error))) {
+                            std::filesystem::remove_all(base / folder, error);
+                        }
+                    }
+                    WritePrivateProfileStringW(L"Sources", extensionId.c_str(), nullptr,
+                        inventory.c_str());
+                }
                 logs_.Write(SUCCEEDED(result) ? "extensions_lab.remove_ok" : "extensions_lab.remove_failed",
                     "hr=" + std::to_string(static_cast<unsigned long>(result)));
                 if (FAILED(result)) MessageBoxW(extensionWindow_, L"删除扩展失败。",
