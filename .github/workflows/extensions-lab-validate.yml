@@ -1,0 +1,60 @@
+name: Validate isolated extensions lab
+
+on:
+  push:
+    branches:
+      - experiment/webview2-extensions
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extensions-lab-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extensions-lab:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - uses: NuGet/setup-nuget@v2
+      - name: Restore dependencies
+        shell: pwsh
+        run: |
+          nuget restore '小窗.slnx' -NonInteractive
+          if ($LASTEXITCODE -ne 0) { throw 'Restore failed' }
+      - name: Build non-elevated experimental EXE and core tests
+        shell: pwsh
+        run: |
+          msbuild '小窗.slnx' /t:Rebuild /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:ExtensionLab=true /m /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Lab build failed' }
+          if (-not (Test-Path 'x64/Release/XiaoChuang-ExtensionsLab.exe')) { throw 'Lab EXE not produced' }
+          & './x64/Release/XiaoChuang.Tests.exe'
+          if ($LASTEXITCODE -ne 0) { throw 'Core tests failed' }
+      - name: Verify manifest and safe launcher
+        shell: pwsh
+        run: |
+          $exe = Get-Item 'x64/Release/XiaoChuang-ExtensionsLab.exe'
+          $bytes = [IO.File]::ReadAllBytes($exe.FullName)
+          $text = [Text.Encoding]::Unicode.GetString($bytes)
+          if ($text.Contains('requireAdministrator')) { throw 'Elevated manifest found in lab EXE' }
+          if (-not (Test-Path '安全模式启动-禁用全部扩展.cmd')) { throw 'Missing external safe-launch command' }
+          $script = Get-Content -Raw '安全模式启动-禁用全部扩展.cmd'
+          if (-not $script.Contains('--extensions-safe-mode')) { throw 'Safe-mode switch missing' }
+          if (-not $script.Contains('%~dp0')) { throw 'Launcher does not locate sibling EXE safely' }
+      - name: Archive experimental build for CI inspection only
+        shell: pwsh
+        run: |
+          $root = 'ExtensionsLab-CI-NotForUsers'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          Copy-Item 'x64/Release/XiaoChuang-ExtensionsLab.exe' $root
+          Copy-Item '安全模式启动-禁用全部扩展.cmd' $root
+          Copy-Item 'docs/EXTENSIONS_LAB_PLAN.md' $root
+          Compress-Archive -Path $root -DestinationPath "$root.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ExtensionsLab-CI-NotForUsers
+          path: ExtensionsLab-CI-NotForUsers.zip
+          retention-days: 14
