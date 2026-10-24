@@ -13,6 +13,16 @@ WebView2 已具有 ICoreWebView2EnvironmentOptions6::put_AreBrowserExtensionsEna
 
 首期不支持在线商店一键安装、CRX 自动导入、自动更新、扩展市场、不可信 DLL。优先 MV3；对兼容性作个别测试而非声称支持所有 Chrome 扩展。
 
+## 首要安全约束：实验宿主不应以管理员身份运行
+
+小窗 v1.4.5 现有 EXE 的发行构建带 `requireAdministrator`（为了与管理员权限游戏的全局热键兼容）。而微软 2026 年 WebView2 安全指南明确推荐 WebView2 宿主进程以**标准用户权限**运行；需要提升权限的工作建议移到单独的高权限辅助进程。这对将要加载第三方扩展的实验版尤其重要。
+
+- **任何不可信第三方扩展实装之前，必须先完成权限降级评估。** 建议实验版单独编译为 `asInvoker`，并显著提示与管理员权限游戏的热键可能受到影响；或将高权限热键职责隔离到受限辅助进程。不能以“只在测试分支”替代权限隔离。
+- 首期只能使用自编写、源码完全可审查的无敏感权限 MV3 测试扩展验证基础接口；未解决权限模型前不做任意扩展安装分发。
+- 禁止将扩展内容、网页消息或扩展提供的脚本任意转交 Win32 高权限执行接口。
+
+官方文档：https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/security
+
 ## 实验版必须与正式版隔离
 
 - 独立 ZIP 名称、EXE 明显 `扩展实验版` 标识，使用独立可辨识的窗口标题/关于信息。
@@ -41,7 +51,8 @@ WebView2 已具有 ICoreWebView2EnvironmentOptions6::put_AreBrowserExtensionsEna
 
 ## 分阶段实现与测试
 
-**阶段 A：API 和隔离验证**
+**阶段 A：权限、安全、API 和隔离验证**
+- 实验版默认 **asInvoker** 或由非提权 WebView2 子进程承载，先验证既有全局热键退化范围；绝不默认把未知扩展载入管理员权限浏览器宿主。
 - 启用 `AreBrowserExtensionsEnabled` 的最低 SDK/Runtime 兼容检查和友好错误。
 - 独立配置与 User Data Folder、互斥量/窗口标题、防止污染正式版。
 - 单个自制无网络权限 MV3 扩展验证注入 CSS/DOM 标记，重启后持久化；卸载后不残留。
