@@ -1,0 +1,43 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-package:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - uses: NuGet/setup-nuget@v2
+      - name: Restore dependencies
+        shell: pwsh
+        run: nuget install packages.config -OutputDirectory packages -NonInteractive
+      - name: Build and test x64
+        shell: pwsh
+        run: |
+          msbuild '小窗.slnx' /t:Rebuild /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:SmokeTestAsInvoker=false /m /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+          & './x64/Release/XiaoChuang.Tests.exe'
+          if ($LASTEXITCODE -ne 0) { throw 'Core tests failed' }
+      - name: Stage portable artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item 'x64/Release/XiaoChuang.exe' 'dist/VeilBrowser.exe'
+          $loader = Get-ChildItem -Path 'x64/Release','packages/Microsoft.Web.WebView2.1.0.4078.44' -Filter WebView2Loader.dll -Recurse -File | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          if (-not $loader) { throw 'Missing x64 WebView2Loader.dll' }
+          Copy-Item $loader.FullName dist
+          Copy-Item LICENSE.txt,THIRD_PARTY_NOTICES.txt dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: veil-browser-windows-x64
+          path: dist
+          if-no-files-found: error
