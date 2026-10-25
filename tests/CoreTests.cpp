@@ -69,8 +69,17 @@ void TestConfigMigration() {
     RECT rect{20, 30, 920, 630};
     Check(store.Save(state, rect, false), L"新配置可保存");
     Check(!std::filesystem::exists(path.wstring() + L".tmp"), L"配置原子保存后不遗留临时文件");
+    std::wifstream privateConfig(path);
+    const std::wstring privateContents((std::istreambuf_iterator<wchar_t>(privateConfig)),
+                                       std::istreambuf_iterator<wchar_t>());
+    privateConfig.close();
+    Check(privateContents.find(L"TabCount=0") != std::wstring::npos &&
+          privateContents.find(L"TabUrl0=") == std::wstring::npos,
+          L"private mode tidak menyimpan riwayat tab");
     xiaochuang::AppState reloaded;
     Check(store.Load(reloaded), L"新配置可重新加载");
+    Check(reloaded.tabs.size() == 1 && reloaded.tabs[0].url == reloaded.settings.homeUrl,
+          L"private mode selalu mulai dari home tab");
     Check(reloaded.settings.holeOpacityPercent == 100, L"新增配置往返一致");
     Check(!reloaded.settings.autoFitVideoFullscreen, L"网页全屏比例适配配置往返一致");
     reloaded.settings.autoFitVideoFullscreen = true;

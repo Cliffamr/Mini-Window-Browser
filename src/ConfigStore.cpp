@@ -133,20 +133,9 @@ bool ConfigStore::Load(AppState& state) const {
     state.session.maximized = ReadInt(path_, kSession, L"Fullscreen", 0) != 0;
     state.session.activeTab = ReadInt(path_, kSession, L"ActiveTab", 0);
 
-    const int tabCount = std::clamp(ReadInt(path_, kSession, L"TabCount", 0), 0,
-                                    static_cast<int>(kMaxTabs));
     state.tabs.clear();
-    for (int index = 0; index < tabCount; ++index) {
-        TabData tab;
-        tab.url = ReadString(path_, kSession, L"TabUrl" + std::to_wstring(index), state.settings.homeUrl);
-        tab.title = ReadString(path_, kSession, L"TabTitle" + std::to_wstring(index), L"Loading / Memuat…");
-        if (tab.url.empty() || tab.url == L"0") tab.url = state.settings.homeUrl;
-        state.tabs.push_back(std::move(tab));
-    }
-    if (state.tabs.empty()) {
-        state.tabs.push_back({L"Loading / Memuat…", state.settings.homeUrl});
-    }
-    state.currentTabIndex = std::clamp(state.session.activeTab, 0, static_cast<int>(state.tabs.size()) - 1);
+    state.tabs.push_back({L"Loading / Memuat…", state.settings.homeUrl});
+    state.currentTabIndex = 0;
 
     for (size_t index = 0; index < kHotkeyCount; ++index) {
         ReadHotkey(path_, kHotkeys, kHotkeyKeys[index], state.hotkeys[index]);
@@ -269,12 +258,8 @@ bool ConfigStore::Save(const AppState& state, const RECT& normalRect, bool maxim
     WriteInt(transactionPath, kSession, L"WinW", normalRect.right - normalRect.left);
     WriteInt(transactionPath, kSession, L"WinH", normalRect.bottom - normalRect.top);
     WriteInt(transactionPath, kSession, L"Fullscreen", maximized ? 1 : 0);
-    WriteInt(transactionPath, kSession, L"ActiveTab", state.currentTabIndex);
-    WriteInt(transactionPath, kSession, L"TabCount", static_cast<int>(state.tabs.size()));
-    for (size_t index = 0; index < state.tabs.size(); ++index) {
-        WriteString(transactionPath, kSession, L"TabUrl" + std::to_wstring(index), state.tabs[index].url);
-        WriteString(transactionPath, kSession, L"TabTitle" + std::to_wstring(index), state.tabs[index].title);
-    }
+    WriteInt(transactionPath, kSession, L"ActiveTab", 0);
+    WriteInt(transactionPath, kSession, L"TabCount", 0);
 
     WritePrivateProfileSectionW(kHotkeys, nullptr, transactionPath.c_str());
     for (size_t index = 0; index < kHotkeyCount; ++index) {

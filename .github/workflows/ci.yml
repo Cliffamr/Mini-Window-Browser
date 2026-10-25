@@ -26,6 +26,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
           & './x64/Release/XiaoChuang.Tests.exe'
           if ($LASTEXITCODE -ne 0) { throw 'Core tests failed' }
+      - name: Run Veil native window smoke test
+        shell: pwsh
+        run: |
+          & './tests/VeilSmoke.ps1' -BuildDirectory './x64/Release'
+          if ($LASTEXITCODE -ne 0) { throw 'Veil window smoke test failed' }
       - name: Stage portable artifact
         shell: pwsh
         run: |

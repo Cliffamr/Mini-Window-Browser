@@ -1078,7 +1078,7 @@ void Application::InitializeWebView() {
                             if (FAILED(webView_->get_Settings(&settings)) || !settings ||
                                 FAILED(settings->put_IsScriptEnabled(TRUE)) ||
                                 FAILED(settings->put_AreDefaultScriptDialogsEnabled(FALSE)) ||
-                                FAILED(settings->put_IsWebMessageEnabled(TRUE)) ||
+                                FAILED(settings->put_IsWebMessageEnabled(FALSE)) ||
                                 FAILED(settings->put_AreDevToolsEnabled(FALSE)) ||
                                 FAILED(settings->put_AreDefaultContextMenusEnabled(FALSE)) ||
                                 FAILED(settings->put_AreHostObjectsAllowed(FALSE)) ||
@@ -1105,28 +1105,8 @@ void Application::InitializeWebView() {
                             webZoom_.Configure(state_.settings);
                             ResizeWebView();
                             webViewController_->put_IsVisible(windowModes_.IsHidden() ? FALSE : TRUE);
-                            const HRESULT scriptResult = webView_->AddScriptToExecuteOnDocumentCreated(
-                                MediaBridge::BootstrapScript(),
-                                Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
-                                    [this, generation](HRESULT result, PCWSTR) -> HRESULT {
-                                        if (shuttingDown_ || generation != webViewGeneration_) return S_OK;
-                                        if (FAILED(result)) {
-                                            ShowError(L"Media controls failed / Kontrol media gagal", L"Browsing remains available; restart Veil Browser / Browser tetap dapat dipakai; mulai ulang Veil Browser.", result);
-                                        }
-                                        logs_.Write("webview.bootstrap.done",
-                                            "generation=" + std::to_string(generation) +
-                                            " hr=" + std::to_string(static_cast<unsigned long>(result)));
-                                        webViewReady_ = true;
-                                        FinishInitialNavigation();
-                                        return S_OK;
-                                    }).Get());
-                            if (FAILED(scriptResult)) {
-                                logs_.Write("webview.bootstrap.submit_failed",
-                                    "hr=" + std::to_string(static_cast<unsigned long>(scriptResult)));
-                                ShowError(L"Media controls failed / Kontrol media gagal", L"Browsing remains available; restart Veil Browser / Browser tetap dapat dipakai; mulai ulang Veil Browser.", scriptResult);
-                                webViewReady_ = true;
-                                FinishInitialNavigation();
-                            }
+                            webViewReady_ = true;
+                            FinishInitialNavigation();
                             return S_OK;
                         }).Get());
                 if (FAILED(creationResult)) {
@@ -1239,20 +1219,7 @@ bool Application::ConfigureWebViewEvents() {
                 }
                 return S_OK;
             }).Get(), &titleChangedToken_);
-    webView_->add_WebMessageReceived(
-        Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-            [this](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
-                wil::unique_cotaskmem_string source;
-                wil::unique_cotaskmem_string current;
-                wil::unique_cotaskmem_string message;
-                if (args && webView_ && SUCCEEDED(args->get_Source(&source)) && source &&
-                    SUCCEEDED(webView_->get_Source(&current)) && current &&
-                    NormalizeComparableUrl(source.get()) == NormalizeComparableUrl(current.get()) &&
-                    SUCCEEDED(args->TryGetWebMessageAsString(&message)) && message) {
-                    HandleWebMessage(message.get());
-                }
-                return S_OK;
-            }).Get(), &webMessageToken_);
+
     const HRESULT fullscreenRegistration = webView_->add_ContainsFullScreenElementChanged(
         Callback<ICoreWebView2ContainsFullScreenElementChangedEventHandler>(
             [this](ICoreWebView2*, IUnknown*) -> HRESULT {
