@@ -286,7 +286,12 @@ RECT ConstrainAspectSizingRect(RECT proposedRect, UINT sizingEdge, int chromeHei
 bool IsSupportedWebNavigationUrl(std::wstring url) {
     std::transform(url.begin(), url.end(), url.begin(),
         [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
-    return url.starts_with(L"https://") || url == L"about:blank";
+    if (url == L"about:blank") return true;
+    if (!url.starts_with(L"https://")) return false;
+    const size_t hostStart = 8;
+    const size_t hostEnd = url.find_first_of(L"/?#", hostStart);
+    const std::wstring host = url.substr(hostStart, hostEnd - hostStart);
+    return !host.empty() && host.find_first_of(L" @\\\t\r\n") == std::wstring::npos;
 }
 
 bool CanCreateTab(size_t tabCount) {

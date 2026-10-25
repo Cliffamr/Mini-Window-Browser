@@ -36,8 +36,23 @@ jobs:
           if (-not $loader) { throw 'Missing x64 WebView2Loader.dll' }
           Copy-Item $loader.FullName dist
           Copy-Item LICENSE.txt,THIRD_PARTY_NOTICES.txt dist
+          Copy-Item README.md dist
+          New-Item -ItemType Directory -Path 'dist/licenses' | Out-Null
+          Copy-Item 'packages/Microsoft.Web.WebView2.1.0.4078.44/LICENSE.txt' 'dist/licenses/WebView2-SDK-LICENSE.txt'
+          Copy-Item 'packages/Microsoft.Web.WebView2.1.0.4078.44/NOTICE.txt' 'dist/licenses/WebView2-SDK-NOTICE.txt'
+          Copy-Item 'packages/Microsoft.Windows.ImplementationLibrary.1.0.250325.1/LICENSE' 'dist/licenses/WIL-LICENSE.txt'
+          Copy-Item 'packages/Microsoft.Windows.ImplementationLibrary.1.0.250325.1/ThirdPartyNotices.txt' 'dist/licenses/WIL-ThirdPartyNotices.txt'
+          "Corresponding source: https://github.com/${{ github.repository }}/tree/${{ github.sha }}" | Set-Content 'dist/SOURCE.txt'
+      - name: Build unsigned installer
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' 'installer\VeilBrowser.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
       - uses: actions/upload-artifact@v4
         with:
           name: veil-browser-windows-x64
-          path: dist
+          path: |
+            dist
+            installer-output/Veil-Browser_0.2.0_x64-setup.exe
           if-no-files-found: error

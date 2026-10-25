@@ -1094,6 +1094,8 @@ void Application::InitializeWebView() {
                                 controller->Close();
                                 webView_.reset();
                                 webViewController_.reset();
+                                ShowWindow(mainWindow_, SW_HIDE);
+                                PostMessageW(mainWindow_, WM_CLOSE, 0, 0);
                                 return S_OK;
                             }
                             const HRESULT zoomResult = webZoom_.Attach(controller, webView_.get());

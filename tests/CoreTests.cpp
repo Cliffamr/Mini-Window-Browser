@@ -245,6 +245,7 @@ void TestVeilBrowserPolicy() {
     Check(IsSupportedWebNavigationUrl(L"ABOUT:BLANK"), L"about:blank diizinkan");
     Check(!IsSupportedWebNavigationUrl(L"http://example.com"), L"HTTP ditolak");
     Check(!IsSupportedWebNavigationUrl(L"file:///C:/secret.txt"), L"file URL ditolak");
+    Check(!IsSupportedWebNavigationUrl(L"https://"), L"HTTPS tanpa host ditolak");
     Check(TopmostInsertAfter(true) == HWND_TOPMOST &&
           TopmostInsertAfter(false) == HWND_NOTOPMOST,
           L"toggle always-on-top memilih z-order yang benar");
