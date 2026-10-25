@@ -236,6 +236,20 @@ void TestWindowTransitions() {
     Check(!state.hidden && state.visibleMode == WindowMode::ImmersionAutoHide, L"显示后恢复可见模式");
 }
 
+void TestVeilBrowserPolicy() {
+    using namespace xiaochuang;
+    Check(kMaxTabs == 5, L"Veil Browser membatasi lima tab");
+    Check(CanCreateTab(0) && CanCreateTab(4) && !CanCreateTab(5),
+          L"tab keenam ditolak");
+    Check(IsSupportedWebNavigationUrl(L"https://example.com/path"), L"HTTPS diizinkan");
+    Check(IsSupportedWebNavigationUrl(L"ABOUT:BLANK"), L"about:blank diizinkan");
+    Check(!IsSupportedWebNavigationUrl(L"http://example.com"), L"HTTP ditolak");
+    Check(!IsSupportedWebNavigationUrl(L"file:///C:/secret.txt"), L"file URL ditolak");
+    Check(TopmostInsertAfter(true) == HWND_TOPMOST &&
+          TopmostInsertAfter(false) == HWND_NOTOPMOST,
+          L"toggle always-on-top memilih z-order yang benar");
+}
+
 void TestHoldGestures() {
     using namespace xiaochuang;
     HoldGestureState gesture;
@@ -480,6 +494,7 @@ int wmain() {
     TestConfigMigration();
     TestLogStore();
     TestWindowTransitions();
+    TestVeilBrowserPolicy();
     TestHoldGestures();
     TestInputAndMediaSelection();
     TestRawMouseButtons();
