@@ -109,6 +109,16 @@ void WindowModeController::SetSystemTray(bool enabled) {
     ApplyVisibleMode(visibleMode_, false);
 }
 
+void WindowModeController::SetAlwaysOnTop(bool enabled) {
+    if (!window_ || !settings_) return;
+    settings_->alwaysOnTop = enabled;
+    ApplyVisibleMode(visibleMode_, false);
+}
+
+void WindowModeController::ToggleAlwaysOnTop() {
+    if (settings_) SetAlwaysOnTop(!settings_->alwaysOnTop);
+}
+
 void WindowModeController::EnterWebFullscreen() {
     if (!window_ || webFullscreen_) return;
     webFullscreen_ = true;
@@ -149,7 +159,7 @@ void WindowModeController::FitWebFullscreenAspect(double aspectRatio) {
         monitor.right - monitor.left, monitor.bottom - monitor.top);
     const RECT desired = PositionAspectFitRect(
         current, target, monitor, work, settings_ ? settings_->snapThreshold : 0);
-    SetWindowPos(window_, HWND_TOPMOST, desired.left, desired.top,
+    SetWindowPos(window_, TopmostInsertAfter(settings_ && settings_->alwaysOnTop), desired.left, desired.top,
                  desired.right - desired.left, desired.bottom - desired.top,
                  SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
     if (layoutCallback_) layoutCallback_();
@@ -270,13 +280,13 @@ void WindowModeController::OnImmersionTimer() {
 }
 
 void WindowModeController::ReassertTopmost() const {
-    if (!window_ || hidden_) return;
+    if (!window_ || hidden_ || !settings_ || !settings_->alwaysOnTop) return;
     const HWND activePopup = GetLastActivePopup(window_);
     if (activePopup && activePopup != window_ && IsWindowVisible(activePopup)) return;
     const HWND foreground = GetForegroundWindow();
     if (foreground && foreground != window_ &&
         GetAncestor(foreground, GA_ROOTOWNER) == window_) return;
-    SetWindowPos(window_, HWND_TOPMOST, 0, 0, 0, 0,
+    SetWindowPos(window_, TopmostInsertAfter(settings_ && settings_->alwaysOnTop), 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
 }
 
@@ -345,7 +355,8 @@ void WindowModeController::ApplyVisibleMode(WindowMode mode, bool restoreGeometr
     if (!window_ || !settings_) return;
     KillTimer(window_, kImmersionTimerId);
     const bool immersive = mode == WindowMode::ImmersionHole || mode == WindowMode::ImmersionAutoHide;
-    const DWORD baseExStyle = WS_EX_TOPMOST | (systemTray_ ? WS_EX_TOOLWINDOW : WS_EX_APPWINDOW);
+    const DWORD baseExStyle = (settings_->alwaysOnTop ? WS_EX_TOPMOST : 0) |
+        (systemTray_ ? WS_EX_TOOLWINDOW : WS_EX_APPWINDOW);
     const DWORD style = mode == WindowMode::Normal ? kNormalStyle : kPopupStyle;
     const DWORD exStyle = immersive
         ? baseExStyle | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE
@@ -359,11 +370,11 @@ void WindowModeController::ApplyVisibleMode(WindowMode mode, bool restoreGeometr
             const RECT rect = CalculateImmersionRect(
                 preImmersionRect_, CurrentMonitorRect(false), chromeHeight_,
                 settings_->snapThreshold);
-            SetWindowPos(window_, HWND_TOPMOST, rect.left, rect.top,
+            SetWindowPos(window_, TopmostInsertAfter(settings_ && settings_->alwaysOnTop), rect.left, rect.top,
                          rect.right - rect.left, rect.bottom - rect.top,
                          positionFlags);
         } else {
-            SetWindowPos(window_, HWND_TOPMOST, 0, 0, 0, 0,
+            SetWindowPos(window_, TopmostInsertAfter(settings_ && settings_->alwaysOnTop), 0, 0, 0, 0,
                          positionFlags | SWP_NOMOVE | SWP_NOSIZE);
         }
         if (chromeVisibility_) chromeVisibility_(false);
@@ -375,21 +386,21 @@ void WindowModeController::ApplyVisibleMode(WindowMode mode, bool restoreGeometr
         if (mode == WindowMode::Maximized) {
             if (restoreGeometry) {
                 const RECT work = CurrentMonitorRect(true);
-                SetWindowPos(window_, HWND_TOPMOST, work.left, work.top,
+                SetWindowPos(window_, TopmostInsertAfter(settings_ && settings_->alwaysOnTop), work.left, work.top,
                              work.right - work.left, work.bottom - work.top,
                              positionFlags);
             } else {
-                SetWindowPos(window_, HWND_TOPMOST, 0, 0, 0, 0,
+                SetWindowPos(window_, TopmostInsertAfter(settings_ && settings_->alwaysOnTop), 0, 0, 0, 0,
                              positionFlags | SWP_NOMOVE | SWP_NOSIZE);
             }
         } else {
             if (restoreGeometry) {
                 const RECT target = normalRect_;
-                SetWindowPos(window_, HWND_TOPMOST, target.left, target.top,
+                SetWindowPos(window_, TopmostInsertAfter(settings_ && settings_->alwaysOnTop), target.left, target.top,
                              target.right - target.left, target.bottom - target.top,
                              positionFlags);
             } else {
-                SetWindowPos(window_, HWND_TOPMOST, 0, 0, 0, 0,
+                SetWindowPos(window_, TopmostInsertAfter(settings_ && settings_->alwaysOnTop), 0, 0, 0, 0,
                              positionFlags | SWP_NOMOVE | SWP_NOSIZE);
             }
         }

@@ -14,6 +14,7 @@
 #include <wil/com.h>
 
 #include <array>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -37,6 +38,11 @@ private:
         Presets = 1009,
         Settings = 1010,
         Tabs = 1011,
+        Back = 1012,
+        Forward = 1013,
+        Reload = 1014,
+        Topmost = 1015,
+        ClickThrough = 1016,
 
         SettingsRadius = 2001,
         SettingsSnap = 2002,
@@ -127,7 +133,10 @@ private:
     LRESULT HitTest(LPARAM lParam) const;
 
     void InitializeWebView();
-    void ConfigureWebViewEvents();
+    bool PrepareTemporaryProfile();
+    void CleanupTemporaryProfile();
+    bool ConfigureCaptureExclusion();
+    bool ConfigureWebViewEvents();
     void FinishInitialNavigation();
     void ResizeWebView();
     void ExecuteScript(const std::wstring& script);
@@ -227,6 +236,11 @@ private:
     HWND bookmarkButton_ = nullptr;
     HWND presetButton_ = nullptr;
     HWND settingsButton_ = nullptr;
+    HWND backButton_ = nullptr;
+    HWND forwardButton_ = nullptr;
+    HWND reloadButton_ = nullptr;
+    HWND topmostButton_ = nullptr;
+    HWND clickThroughButton_ = nullptr;
     HWND settingsWindow_ = nullptr;
     HWND bookmarkWindow_ = nullptr;
     HWND presetWindow_ = nullptr;
@@ -247,6 +261,7 @@ private:
     UINT64 webViewGeneration_ = 0;
     bool trayIconAdded_ = false;
     std::wstring webViewVersion_;
+    std::filesystem::path temporaryProfilePath_;
     std::wstring lastShownHotkeyErrorSignature_;
     std::wstring currentHotkeyErrorSignature_;
     ULONGLONG hotkeyErrorFirstSeenAt_ = 0;
@@ -278,6 +293,7 @@ private:
     EventRegistrationToken windowCloseToken_{};
     EventRegistrationToken downloadToken_{};
     EventRegistrationToken processFailedToken_{};
+    EventRegistrationToken permissionToken_{};
 
     struct SettingsControls {
         HWND radius = nullptr;

@@ -52,6 +52,8 @@ constexpr UINT kCloseCurrentTabCommand = 51001;
 constexpr UINT kCloseOtherTabsCommand = 51002;
 constexpr UINT kCloseAllTabsCommand = 51003;
 constexpr UINT kRepairWebViewCommand = 51004;
+constexpr DWORD kWdaExcludeFromCapture = 0x00000011;
+constexpr wchar_t kTemporaryProfilePrefix[] = L"VeilBrowser-";
 
 std::wstring WindowText(HWND window) {
     const int length = GetWindowTextLengthW(window);
@@ -187,8 +189,9 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
     smallIcon_ = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_SMALL), IMAGE_ICON,
                                                 24, 24, LR_DEFAULTCOLOR));
     const RECT initial = state_.session.normalRect;
-    mainWindow_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_APPWINDOW, kMainWindowClass,
-        L"小窗浏览器", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+    const DWORD mainExStyle = (state_.settings.alwaysOnTop ? WS_EX_TOPMOST : 0) | WS_EX_APPWINDOW;
+    mainWindow_ = CreateWindowExW(mainExStyle, kMainWindowClass,
+        L"Veil Browser", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         initial.left, initial.top, initial.right - initial.left, initial.bottom - initial.top,
         nullptr, nullptr, instance_, this);
     if (!mainWindow_) {
@@ -197,6 +200,18 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
     }
     if (largeIcon_) SendMessageW(mainWindow_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(largeIcon_));
     if (smallIcon_) SendMessageW(mainWindow_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(smallIcon_));
+    if (!ConfigureCaptureExclusion()) {
+        ShowError(L"Veil Browser", L"Capture protection is unavailable. The window will stay closed.");
+        DestroyWindow(mainWindow_);
+        mainWindow_ = nullptr;
+        return false;
+    }
+    if (!PrepareTemporaryProfile()) {
+        ShowError(L"Veil Browser", L"Temporary private profile could not be created.");
+        DestroyWindow(mainWindow_);
+        mainWindow_ = nullptr;
+        return false;
+    }
 
     windowModes_.Initialize(mainWindow_, &state_.settings, state_.session.normalRect,
         state_.session.maximized, chromeHeight_,
@@ -234,6 +249,7 @@ void Application::Shutdown() {
     windowModes_.Shutdown();
     RemoveTrayIcon();
     CloseWebView();
+    CleanupTemporaryProfile();
     if (uiFont_) { DeleteObject(uiFont_); uiFont_ = nullptr; }
     if (titleFont_) { DeleteObject(titleFont_); titleFont_ = nullptr; }
     if (largeIcon_) { DestroyIcon(largeIcon_); largeIcon_ = nullptr; }
@@ -281,17 +297,23 @@ void Application::CreateMainControls() {
         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_FIXEDWIDTH | TCS_OWNERDRAWFIXED | TCS_FOCUSNEVER,
         0, 0, 0, 0, mainWindow_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(Tabs)), instance_, nullptr);
     SetWindowSubclass(tabControl_, TabSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
-    goButton_ = CreateThemedButton(mainWindow_, L"前往", Go);
+    backButton_ = CreateThemedButton(mainWindow_, L"Back", Back);
+    forwardButton_ = CreateThemedButton(mainWindow_, L"Next", Forward);
+    reloadButton_ = CreateThemedButton(mainWindow_, L"Reload", Reload);
+    goButton_ = CreateThemedButton(mainWindow_, L"Go", Go);
     addTabButton_ = CreateThemedButton(mainWindow_, L"＋", AddTab);
+    topmostButton_ = CreateThemedButton(mainWindow_, L"Top", Topmost);
+    clickThroughButton_ = CreateThemedButton(mainWindow_, L"Pass", ClickThrough);
     minimizeButton_ = CreateThemedButton(mainWindow_, L"—", Minimize);
     maximizeButton_ = CreateThemedButton(mainWindow_, L"□", Maximize);
     closeButton_ = CreateThemedButton(mainWindow_, L"×", Close);
     starButton_ = CreateThemedButton(mainWindow_, L"☆", Star);
-    bookmarkButton_ = CreateThemedButton(mainWindow_, L"书签", Bookmarks);
-    presetButton_ = CreateThemedButton(mainWindow_, L"预设", Presets);
-    settingsButton_ = CreateThemedButton(mainWindow_, L"设置", Settings);
+    bookmarkButton_ = CreateThemedButton(mainWindow_, L"Marks", Bookmarks);
+    presetButton_ = CreateThemedButton(mainWindow_, L"Scenes", Presets);
+    settingsButton_ = CreateThemedButton(mainWindow_, L"Settings", Settings);
 
-    const HWND controls[] = {addressEdit_, tabControl_, goButton_, addTabButton_, minimizeButton_,
+    const HWND controls[] = {addressEdit_, tabControl_, backButton_, forwardButton_, reloadButton_,
+        goButton_, addTabButton_, topmostButton_, clickThroughButton_, minimizeButton_,
         maximizeButton_, closeButton_, starButton_, bookmarkButton_, presetButton_, settingsButton_};
     for (HWND control : controls) SetControlFont(control);
     RebuildTabControl();
@@ -315,6 +337,10 @@ void Application::LayoutMainControls() {
         right -= captionButtonWidth;
         MoveWindow(minimizeButton_, right - captionButtonWidth, buttonY, captionButtonWidth, buttonHeight, TRUE);
         right -= captionButtonWidth;
+        MoveWindow(clickThroughButton_, right - Scale(52), buttonY, Scale(52), buttonHeight, TRUE);
+        right -= Scale(52);
+        MoveWindow(topmostButton_, right - Scale(44), buttonY, Scale(44), buttonHeight, TRUE);
+        right -= Scale(44);
         MoveWindow(addTabButton_, right - captionButtonWidth, buttonY,
                    captionButtonWidth, buttonHeight, TRUE);
         right -= captionButtonWidth;
@@ -343,17 +369,28 @@ void Application::LayoutMainControls() {
         for (const HWND button : optionalButtons) {
             ShowWindow(button, compact ? SW_HIDE : SW_SHOWNA);
         }
-        ShowWindow(goButton_, SW_SHOWNA);
+        const HWND navigationButtons[] = {backButton_, forwardButton_, reloadButton_, goButton_};
+        for (HWND button : navigationButtons) ShowWindow(button, compact ? SW_HIDE : SW_SHOWNA);
         if (compact) {
             const int compactMargin = Scale(4);
             const int compactGoWidth = Scale(38);
             const int goX = std::max(compactMargin, width - compactMargin - compactGoWidth);
+            ShowWindow(goButton_, SW_SHOWNA);
             MoveWindow(goButton_, goX, navigationY + Scale(4), compactGoWidth,
                        navigationButtonHeight, TRUE);
             MoveWindow(addressEdit_, compactMargin, navigationY + Scale(7),
                        std::max(1, goX - compactMargin - Scale(4)),
                        navigationRowHeight_ - Scale(14), TRUE);
         } else {
+            int xLeft = margin;
+            auto placeLeft = [&](HWND button, int buttonWidth) {
+                MoveWindow(button, xLeft, navigationY + Scale(4), buttonWidth,
+                           navigationButtonHeight, TRUE);
+                xLeft += buttonWidth + gap;
+            };
+            placeLeft(backButton_, textWidth);
+            placeLeft(forwardButton_, textWidth);
+            placeLeft(reloadButton_, Scale(60));
             int xRight = width - margin;
             auto placeRight = [&](HWND button, int buttonWidth) {
                 xRight -= buttonWidth;
@@ -361,14 +398,13 @@ void Application::LayoutMainControls() {
                            navigationButtonHeight, TRUE);
                 xRight -= gap;
             };
-            placeRight(settingsButton_, textWidth);
-            placeRight(presetButton_, textWidth);
-            placeRight(bookmarkButton_, textWidth);
+            placeRight(settingsButton_, Scale(68));
+            placeRight(presetButton_, Scale(58));
+            placeRight(bookmarkButton_, Scale(58));
             placeRight(starButton_, smallWidth);
             placeRight(goButton_, textWidth);
-            const int addressWidth = std::max(Scale(120), xRight - margin);
-            MoveWindow(addressEdit_, margin + Scale(9), navigationY + Scale(7),
-                       std::max(Scale(80), addressWidth - gap - Scale(20)),
+            MoveWindow(addressEdit_, xLeft, navigationY + Scale(7),
+                       std::max(Scale(80), xRight - xLeft - gap),
                        navigationRowHeight_ - Scale(14), TRUE);
         }
     }
@@ -377,7 +413,8 @@ void Application::LayoutMainControls() {
 }
 
 void Application::ShowChrome(bool visible) {
-    const HWND controls[] = {addressEdit_, tabControl_, goButton_, addTabButton_, minimizeButton_,
+    const HWND controls[] = {addressEdit_, tabControl_, backButton_, forwardButton_, reloadButton_,
+        goButton_, addTabButton_, topmostButton_, clickThroughButton_, minimizeButton_,
         maximizeButton_, closeButton_, starButton_, bookmarkButton_, presetButton_, settingsButton_};
     for (HWND control : controls) {
         if (control) ShowWindow(control, visible ? SW_SHOWNA : SW_HIDE);
@@ -472,7 +509,8 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
         SetWindowPos(window, nullptr, suggested->left, suggested->top,
                      suggested->right - suggested->left, suggested->bottom - suggested->top,
                      SWP_NOZORDER | SWP_NOACTIVATE);
-        const HWND controls[] = {addressEdit_, tabControl_, goButton_, addTabButton_, minimizeButton_,
+        const HWND controls[] = {addressEdit_, tabControl_, backButton_, forwardButton_, reloadButton_,
+            goButton_, addTabButton_, topmostButton_, clickThroughButton_, minimizeButton_,
             maximizeButton_, closeButton_, starButton_, bookmarkButton_, presetButton_, settingsButton_};
         for (HWND control : controls) SetControlFont(control);
         LayoutMainControls();
@@ -501,7 +539,19 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
     case WM_COMMAND: {
         const int id = LOWORD(wParam);
         if (id == Go) NavigateAddressBar();
-        else if (id == AddTab) CreateNewTab(state_.settings.homeUrl, L"新标签页", true);
+        else if (id == Back && webView_) webView_->GoBack();
+        else if (id == Forward && webView_) webView_->GoForward();
+        else if (id == Reload && webView_) webView_->Reload();
+        else if (id == AddTab) CreateNewTab(state_.settings.homeUrl, L"New tab", true);
+        else if (id == Topmost) {
+            windowModes_.ToggleAlwaysOnTop();
+            SetWindowTextW(topmostButton_, windowModes_.IsAlwaysOnTop() ? L"Top:on" : L"Top:off");
+            SaveConfiguration();
+        }
+        else if (id == ClickThrough) {
+            windowModes_.ToggleImmersion();
+            SetWindowTextW(clickThroughButton_, windowModes_.IsImmersive() ? L"Pass:on" : L"Pass:off");
+        }
         else if (id == Minimize) MinimizeWindow();
         else if (id == Maximize) { windowModes_.ToggleMaximized(); SetWindowTextW(maximizeButton_, windowModes_.IsSeamlessMaximized() ? L"❐" : L"□"); }
         else if (id == Close) SendMessageW(window, WM_CLOSE, 0, 0);
@@ -921,8 +971,48 @@ LRESULT CALLBACK Application::TabSubclassProc(HWND window, UINT message, WPARAM 
     return DefSubclassProc(window, message, wParam, lParam);
 }
 
+bool Application::ConfigureCaptureExclusion() {
+    if (!mainWindow_ || !SetWindowDisplayAffinity(mainWindow_, kWdaExcludeFromCapture)) {
+        logs_.Write("capture.exclusion.failed", "error=" + std::to_string(GetLastError()));
+        return false;
+    }
+    DWORD affinity = 0;
+    if (!GetWindowDisplayAffinity(mainWindow_, &affinity) || affinity != kWdaExcludeFromCapture) {
+        logs_.Write("capture.exclusion.verify_failed",
+                    "affinity=" + std::to_string(affinity) +
+                    " error=" + std::to_string(GetLastError()));
+        return false;
+    }
+    logs_.Write("capture.exclusion.ready");
+    return true;
+}
+
+bool Application::PrepareTemporaryProfile() {
+    wchar_t tempDirectory[MAX_PATH]{};
+    if (GetTempPathW(static_cast<DWORD>(std::size(tempDirectory)), tempDirectory) == 0) return false;
+    wchar_t uniquePath[MAX_PATH]{};
+    if (GetTempFileNameW(tempDirectory, kTemporaryProfilePrefix, 0, uniquePath) == 0) return false;
+    DeleteFileW(uniquePath);
+    std::error_code error;
+    temporaryProfilePath_ = uniquePath;
+    if (!std::filesystem::create_directory(temporaryProfilePath_, error) || error) {
+        temporaryProfilePath_.clear();
+        return false;
+    }
+    logs_.Write("webview.profile.temporary_ready");
+    return true;
+}
+
+void Application::CleanupTemporaryProfile() {
+    if (temporaryProfilePath_.empty()) return;
+    std::error_code error;
+    std::filesystem::remove_all(temporaryProfilePath_, error);
+    logs_.Write(error ? "webview.profile.cleanup_deferred" : "webview.profile.cleaned");
+    temporaryProfilePath_.clear();
+}
+
 void Application::InitializeWebView() {
-    if (shuttingDown_) return;
+    if (shuttingDown_ || temporaryProfilePath_.empty()) return;
     const UINT64 generation = ++webViewGeneration_;
     logs_.Write("webview.environment.create_begin",
         "generation=" + std::to_string(generation) +
@@ -933,11 +1023,17 @@ void Application::InitializeWebView() {
         ShowError(L"WebView2 初始化失败", L"无法创建 WebView2 环境选项。");
         return;
     }
+    std::wstring browserArguments = L"--disable-sync";
     if (state_.settings.renderMode == RenderMode::SoftwareCompatibility) {
-        options->put_AdditionalBrowserArguments(L"--disable-gpu");
+        browserArguments += L" --disable-gpu";
+    }
+    if (FAILED(options->put_AdditionalBrowserArguments(browserArguments.c_str())) ||
+        FAILED(options->put_AllowSingleSignOnUsingOSPrimaryAccount(FALSE))) {
+        ShowError(L"Veil Browser", L"WebView2 private-mode options could not be applied.");
+        return;
     }
     const HRESULT result = CreateCoreWebView2EnvironmentWithOptions(
-        nullptr, nullptr, options.Get(),
+        nullptr, temporaryProfilePath_.c_str(), options.Get(),
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [this, generation](HRESULT environmentResult, ICoreWebView2Environment* environment) -> HRESULT {
                 if (shuttingDown_ || generation != webViewGeneration_) return S_OK;
@@ -979,14 +1075,27 @@ void Application::InitializeWebView() {
                             }
 
                             wil::com_ptr<ICoreWebView2Settings> settings;
-                            if (SUCCEEDED(webView_->get_Settings(&settings)) && settings) {
-                                settings->put_IsScriptEnabled(TRUE);
-                                settings->put_AreDefaultScriptDialogsEnabled(TRUE);
-                                settings->put_IsWebMessageEnabled(TRUE);
-                                settings->put_AreDevToolsEnabled(TRUE);
-                                settings->put_IsStatusBarEnabled(FALSE);
+                            if (FAILED(webView_->get_Settings(&settings)) || !settings ||
+                                FAILED(settings->put_IsScriptEnabled(TRUE)) ||
+                                FAILED(settings->put_AreDefaultScriptDialogsEnabled(FALSE)) ||
+                                FAILED(settings->put_IsWebMessageEnabled(TRUE)) ||
+                                FAILED(settings->put_AreDevToolsEnabled(FALSE)) ||
+                                FAILED(settings->put_AreDefaultContextMenusEnabled(FALSE)) ||
+                                FAILED(settings->put_AreHostObjectsAllowed(FALSE)) ||
+                                FAILED(settings->put_IsStatusBarEnabled(FALSE))) {
+                                ShowError(L"Veil Browser", L"Web security settings could not be applied.");
+                                controller->Close();
+                                webView_.reset();
+                                webViewController_.reset();
+                                return S_OK;
                             }
-                            ConfigureWebViewEvents();
+                            if (!ConfigureWebViewEvents()) {
+                                ShowError(L"Veil Browser", L"Web security event handlers could not be installed.");
+                                controller->Close();
+                                webView_.reset();
+                                webViewController_.reset();
+                                return S_OK;
+                            }
                             const HRESULT zoomResult = webZoom_.Attach(controller, webView_.get());
                             if (FAILED(zoomResult)) {
                                 ShowError(L"网页缩放初始化失败", L"无法监听网页缩放变化。", zoomResult);
@@ -1032,9 +1141,9 @@ void Application::InitializeWebView() {
     }
 }
 
-void Application::ConfigureWebViewEvents() {
-    if (!webView_) return;
-    webView_->add_NavigationStarting(
+bool Application::ConfigureWebViewEvents() {
+    if (!webView_) return false;
+    const HRESULT navigationRegistration = webView_->add_NavigationStarting(
         Callback<ICoreWebView2NavigationStartingEventHandler>(
             [this](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
 #ifdef XIAOCHUANG_SMOKE_TEST
@@ -1044,6 +1153,14 @@ void Application::ConfigureWebViewEvents() {
                 inputGuard_.SetWebTyping(false);
                 UINT64 navigationId = 0;
                 if (args) {
+                    wil::unique_cotaskmem_string uri;
+                    if (FAILED(args->get_Uri(&uri)) || !uri ||
+                        !IsSupportedWebNavigationUrl(uri.get())) {
+                        args->put_Cancel(TRUE);
+                        logs_.Write("navigation.blocked_non_https");
+                        EndContentWait();
+                        return S_OK;
+                    }
                     args->get_NavigationId(&navigationId);
                     if (waitingForTabContent_) waitingNavigationId_ = navigationId;
                 }
@@ -1123,8 +1240,13 @@ void Application::ConfigureWebViewEvents() {
     webView_->add_WebMessageReceived(
         Callback<ICoreWebView2WebMessageReceivedEventHandler>(
             [this](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                wil::unique_cotaskmem_string source;
+                wil::unique_cotaskmem_string current;
                 wil::unique_cotaskmem_string message;
-                if (args && SUCCEEDED(args->TryGetWebMessageAsString(&message)) && message) {
+                if (args && webView_ && SUCCEEDED(args->get_Source(&source)) && source &&
+                    SUCCEEDED(webView_->get_Source(&current)) && current &&
+                    NormalizeComparableUrl(source.get()) == NormalizeComparableUrl(current.get()) &&
+                    SUCCEEDED(args->TryGetWebMessageAsString(&message)) && message) {
                     HandleWebMessage(message.get());
                 }
                 return S_OK;
@@ -1140,39 +1262,30 @@ void Application::ConfigureWebViewEvents() {
                   L"网页仍可在小窗内容区全屏，但 Esc 恢复和自动比例调整可能不可用。",
                   fullscreenRegistration);
     }
-    webView_->add_NewWindowRequested(
+    const HRESULT popupRegistration = webView_->add_NewWindowRequested(
         Callback<ICoreWebView2NewWindowRequestedEventHandler>(
-            [this](ICoreWebView2*, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
-                wil::unique_cotaskmem_string uri;
-                if (args && SUCCEEDED(args->get_Uri(&uri)) && uri) {
-                    args->put_Handled(TRUE);
-                    if (IsSupportedWebNavigationUrl(uri.get())) {
-                        auto deferredUri = std::make_unique<std::wstring>(uri.get());
-                        if (PostMessageW(mainWindow_, kDeferredNewTabMessage, 0,
-                                         reinterpret_cast<LPARAM>(deferredUri.get()))) {
-                            deferredUri.release();
-                        }
-                    }
-                }
+            [](ICoreWebView2*, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
+                if (args) args->put_Handled(TRUE);
                 return S_OK;
             }).Get(), &newWindowToken_);
-    webView_->add_WindowCloseRequested(
-        Callback<ICoreWebView2WindowCloseRequestedEventHandler>(
-            [this](ICoreWebView2*, IUnknown*) -> HRESULT {
-                PostMessageW(mainWindow_, kCloseTabMessage,
-                             static_cast<WPARAM>(state_.currentTabIndex), 0);
+    const HRESULT permissionRegistration = webView_->add_PermissionRequested(
+        Callback<ICoreWebView2PermissionRequestedEventHandler>(
+            [](ICoreWebView2*, ICoreWebView2PermissionRequestedEventArgs* args) -> HRESULT {
+                if (args) args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
                 return S_OK;
-            }).Get(), &windowCloseToken_);
+            }).Get(), &permissionToken_);
+    HRESULT downloadRegistration = E_NOINTERFACE;
     wil::com_ptr<ICoreWebView2_4> webView4;
     if (webView_.try_query_to(&webView4) && webView4) {
-        webView4->add_DownloadStarting(
+        downloadRegistration = webView4->add_DownloadStarting(
             Callback<ICoreWebView2DownloadStartingEventHandler>(
-                [this](ICoreWebView2*, ICoreWebView2DownloadStartingEventArgs*) -> HRESULT {
+                [this](ICoreWebView2*, ICoreWebView2DownloadStartingEventArgs* args) -> HRESULT {
+                    if (args) args->put_Cancel(TRUE);
                     EndContentWait();
                     return S_OK;
                 }).Get(), &downloadToken_);
     }
-    webView_->add_ProcessFailed(
+    const HRESULT processRegistration = webView_->add_ProcessFailed(
         Callback<ICoreWebView2ProcessFailedEventHandler>(
             [this](ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs* args) -> HRESULT {
                 COREWEBVIEW2_PROCESS_FAILED_KIND kind = COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED;
@@ -1180,6 +1293,9 @@ void Application::ConfigureWebViewEvents() {
                 HandleProcessFailure(kind);
                 return S_OK;
             }).Get(), &processFailedToken_);
+    return SUCCEEDED(navigationRegistration) && SUCCEEDED(popupRegistration) &&
+        SUCCEEDED(permissionRegistration) && SUCCEEDED(downloadRegistration) &&
+        SUCCEEDED(processRegistration);
 }
 
 void Application::FinishInitialNavigation() {
@@ -1419,6 +1535,11 @@ void Application::CloseWebView() {
 }
 
 void Application::CreateNewTab(const std::wstring& url, const std::wstring& title, bool activate) {
+    if (!CanCreateTab(state_.tabs.size())) {
+        MessageBoxW(mainWindow_, L"Maximum 5 tabs / Maksimal 5 tab.",
+                    L"Veil Browser", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
     const std::wstring targetUrl = url.empty() ? state_.settings.homeUrl : url;
     const std::wstring targetTitle = IsPlaceholderTabTitle(title)
         ? SuggestedTitleForUrl(targetUrl) : title;
@@ -1526,6 +1647,7 @@ void Application::RebuildTabControl() {
             static_cast<int>(state_.tabs.size()) - 1);
         TabCtrl_SetCurSel(tabControl_, state_.currentTabIndex);
     }
+    if (addTabButton_) EnableWindow(addTabButton_, CanCreateTab(state_.tabs.size()) ? TRUE : FALSE);
     LayoutMainControls();
 }
 
@@ -1685,8 +1807,8 @@ void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) 
     const std::wstring normalized = NormalizeInputUrl(url);
     if (!IsSupportedWebNavigationUrl(normalized)) {
         logs_.Write("navigation.unsupported_scheme");
-        MessageBoxW(mainWindow_, L"仅支持 http、https、file 和 about:blank 地址。",
-                    L"无法打开地址", MB_OK | MB_ICONWARNING);
+        MessageBoxW(mainWindow_, L"Only HTTPS is allowed / Hanya HTTPS yang diizinkan.",
+                    L"Veil Browser", MB_OK | MB_ICONWARNING);
         return;
     }
     // Each user navigation owns its own independent 5s health check.
@@ -2929,7 +3051,8 @@ void Application::ApplyPreset(const Preset& preset) {
     windowModes_.ApplyPresetGeometry(preset.normalRect, preset.maximized);
     windowModes_.RefreshVisualState();
     if (!preset.tabs.empty()) {
-        state_.tabs = preset.tabs;
+        state_.tabs.assign(preset.tabs.begin(),
+            preset.tabs.begin() + std::min(preset.tabs.size(), kMaxTabs));
         for (TabData& tab : state_.tabs) {
             if (tab.url.empty()) tab.url = state_.settings.homeUrl;
             if (IsPlaceholderTabTitle(tab.title)) tab.title = SuggestedTitleForUrl(tab.url);

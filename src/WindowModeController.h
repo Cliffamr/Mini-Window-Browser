@@ -25,6 +25,7 @@ public:
             visibleMode_ == WindowMode::ImmersionAutoHide;
     }
     bool IsHidden() const noexcept { return hidden_; }
+    bool IsAlwaysOnTop() const noexcept { return settings_ && settings_->alwaysOnTop; }
     bool IsWebFullscreen() const noexcept { return webFullscreen_; }
     const RECT& NormalRect() const noexcept { return normalRect_; }
 
@@ -33,6 +34,8 @@ public:
     void SetImmersion(bool enabled);
     void SetHidden(bool hidden);
     void SetSystemTray(bool enabled);
+    void SetAlwaysOnTop(bool enabled);
+    void ToggleAlwaysOnTop();
     void SetChromeHeight(int chromeHeight) noexcept { chromeHeight_ = chromeHeight; }
     void EnterWebFullscreen();
     void LeaveWebFullscreen();

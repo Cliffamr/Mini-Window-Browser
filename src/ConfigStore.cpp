@@ -115,7 +115,7 @@ bool ConfigStore::Load(AppState& state) const {
     state.settings.lockVideoFullscreenAspect = ReadInt(path_, kSettings, L"LockVideoFullscreenAspect", 0) != 0;
     state.settings.maximizedTopDragEnabled = ReadInt(path_, kSettings, L"MaximizedTopDragEnabled", 0) != 0;
     state.settings.immersionStyle = static_cast<ImmersionStyle>(
-        std::clamp(ReadInt(path_, kSettings, L"ImmersionStyle", 0), 0, 1));
+        std::clamp(ReadInt(path_, kSettings, L"ImmersionStyle", 1), 0, 1));
     const std::wstring renderMode = ReadString(path_, kSettings, L"RenderMode", L"Auto");
     state.settings.renderMode = _wcsicmp(renderMode.c_str(), L"Software") == 0
         ? RenderMode::SoftwareCompatibility : RenderMode::AutomaticGpu;
@@ -123,7 +123,8 @@ bool ConfigStore::Load(AppState& state) const {
     if (_wcsicmp(theme.c_str(), L"Light") == 0) state.settings.themeMode = ThemeMode::Light;
     else if (_wcsicmp(theme.c_str(), L"Dark") == 0) state.settings.themeMode = ThemeMode::Dark;
     else state.settings.themeMode = ThemeMode::System;
-    state.settings.homeUrl = ReadString(path_, kSettings, L"HomeUrl", L"https://www.bilibili.com");
+    state.settings.alwaysOnTop = ReadInt(path_, kSettings, L"AlwaysOnTop", 1) != 0;
+    state.settings.homeUrl = ReadString(path_, kSettings, L"HomeUrl", L"https://duckduckgo.com/");
     state.settings.Clamp();
 
     state.session.normalRect = MakeRect(
@@ -132,7 +133,8 @@ bool ConfigStore::Load(AppState& state) const {
     state.session.maximized = ReadInt(path_, kSession, L"Fullscreen", 0) != 0;
     state.session.activeTab = ReadInt(path_, kSession, L"ActiveTab", 0);
 
-    const int tabCount = std::clamp(ReadInt(path_, kSession, L"TabCount", 0), 0, 100);
+    const int tabCount = std::clamp(ReadInt(path_, kSession, L"TabCount", 0), 0,
+                                    static_cast<int>(kMaxTabs));
     state.tabs.clear();
     for (int index = 0; index < tabCount; ++index) {
         TabData tab;
@@ -190,7 +192,8 @@ bool ConfigStore::Load(AppState& state) const {
             std::clamp(ReadInt(path_, kPresets, prefix + L"ImmStyle", 0), 0, 1));
         preset.homeUrl = ReadString(path_, kPresets, prefix + L"HomeUrl", state.settings.homeUrl);
         preset.currentUrl = ReadString(path_, kPresets, prefix + L"CurUrl", preset.homeUrl);
-        const int presetTabCount = std::clamp(ReadInt(path_, kPresets, prefix + L"TabCount", 0), 0, 100);
+        const int presetTabCount = std::clamp(ReadInt(path_, kPresets, prefix + L"TabCount", 0), 0,
+                                              static_cast<int>(kMaxTabs));
         for (int tabIndex = 0; tabIndex < presetTabCount; ++tabIndex) {
             const std::wstring tabPrefix = prefix + L"Tab" + std::to_wstring(tabIndex) + L"_";
             TabData tab;
@@ -250,6 +253,7 @@ bool ConfigStore::Save(const AppState& state, const RECT& normalRect, bool maxim
     WriteInt(transactionPath, kSettings, L"AutoFitVideoFullscreen", settings.autoFitVideoFullscreen ? 1 : 0);
     WriteInt(transactionPath, kSettings, L"LockVideoFullscreenAspect", settings.lockVideoFullscreenAspect ? 1 : 0);
     WriteInt(transactionPath, kSettings, L"MaximizedTopDragEnabled", settings.maximizedTopDragEnabled ? 1 : 0);
+    WriteInt(transactionPath, kSettings, L"AlwaysOnTop", settings.alwaysOnTop ? 1 : 0);
     WriteInt(transactionPath, kSettings, L"ImmersionStyle", static_cast<int>(settings.immersionStyle));
     WriteString(transactionPath, kSettings, L"RenderMode",
                 settings.renderMode == RenderMode::SoftwareCompatibility ? L"Software" : L"Auto");
@@ -346,14 +350,14 @@ bool ConfigStore::Save(const AppState& state, const RECT& normalRect, bool maxim
 }
 
 std::wstring NormalizeInputUrl(const std::wstring& input) {
-    if (input.empty()) return L"https://www.bilibili.com";
+    if (input.empty()) return L"https://duckduckgo.com/";
     if (_wcsicmp(input.c_str(), L"about:blank") == 0) return L"about:blank";
     if (input.find(L"://") != std::wstring::npos) return input;
     if (input.find(L' ') == std::wstring::npos && input.find(L'.') != std::wstring::npos) {
         return L"https://" + input;
     }
     std::wostringstream encoded;
-    encoded << L"https://www.bing.com/search?q=";
+    encoded << L"https://duckduckgo.com/?q=";
     for (const wchar_t character : input) {
         if ((character >= L'A' && character <= L'Z') ||
             (character >= L'a' && character <= L'z') ||

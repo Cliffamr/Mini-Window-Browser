@@ -80,6 +80,8 @@ bool IsUsableTextCaret(const RECT& caretRect, const RECT& clientRect,
                        bool caretOwnsKeyboardFocus);
 bool IsHoleMaskColumnTransparent(int coordinate, int transparencyPercent);
 bool IsSupportedWebNavigationUrl(std::wstring url);
+bool CanCreateTab(size_t tabCount);
+HWND TopmostInsertAfter(bool enabled);
 std::wstring TrimWhitespace(std::wstring value);
 bool HasPresetNameConflict(const std::vector<std::wstring>& names,
                            const std::wstring& candidate, size_t ignoredIndex = SIZE_MAX);

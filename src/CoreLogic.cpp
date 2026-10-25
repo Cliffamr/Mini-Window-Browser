@@ -286,8 +286,15 @@ RECT ConstrainAspectSizingRect(RECT proposedRect, UINT sizingEdge, int chromeHei
 bool IsSupportedWebNavigationUrl(std::wstring url) {
     std::transform(url.begin(), url.end(), url.begin(),
         [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
-    return url.starts_with(L"https://") || url.starts_with(L"http://") ||
-        url.starts_with(L"file://") || url == L"about:blank";
+    return url.starts_with(L"https://") || url == L"about:blank";
+}
+
+bool CanCreateTab(size_t tabCount) {
+    return tabCount < kMaxTabs;
+}
+
+HWND TopmostInsertAfter(bool enabled) {
+    return enabled ? HWND_TOPMOST : HWND_NOTOPMOST;
 }
 
 RECT CalculateImmersionRect(const RECT& normalRect, const RECT& monitorRect,

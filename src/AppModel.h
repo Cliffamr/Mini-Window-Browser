@@ -13,6 +13,8 @@
 
 namespace xiaochuang {
 
+inline constexpr size_t kMaxTabs = 5;
+
 enum class WindowMode {
     Normal,
     Maximized,
@@ -87,13 +89,14 @@ struct AppSettings {
     bool autoFitVideoFullscreen = false;
     bool lockVideoFullscreenAspect = false;
     bool maximizedTopDragEnabled = false;
-    ImmersionStyle immersionStyle = ImmersionStyle::Hole;
+    ImmersionStyle immersionStyle = ImmersionStyle::AutoHide;
     RenderMode renderMode = RenderMode::AutomaticGpu;
     ThemeMode themeMode = ThemeMode::System;
     // Global housekeeping: intentionally not stored in scene presets.
     bool autoCleanLogs = true;
     int logRetentionDays = 7;
-    std::wstring homeUrl = L"https://www.bilibili.com";
+    bool alwaysOnTop = true;
+    std::wstring homeUrl = L"https://duckduckgo.com/";
 
     void Clamp() {
         holeRadius = std::clamp(holeRadius, 0, 4000);
@@ -107,14 +110,14 @@ struct AppSettings {
         holdPlaybackRate = std::clamp(holdPlaybackRate, 2, 5);
         fixedWebZoomPercent = std::clamp(fixedWebZoomPercent, 25, 500);
         if (homeUrl.empty() || homeUrl == L"0") {
-            homeUrl = L"https://www.bilibili.com";
+            homeUrl = L"https://duckduckgo.com/";
         }
     }
 };
 
 struct TabData {
-    std::wstring title = L"正在加载…";
-    std::wstring url = L"https://www.bilibili.com";
+    std::wstring title = L"Loading…";
+    std::wstring url = L"https://duckduckgo.com/";
 };
 
 struct Bookmark {
