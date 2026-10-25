@@ -92,11 +92,11 @@ bool IsMouseVirtualKey(UINT virtualKey) {
 }
 
 std::wstring FormatTabTitle(const std::wstring& title) {
-    return title.empty() ? L"正在加载…" : title;
+    return title.empty() ? L"Loading / Memuat…" : title;
 }
 
 bool IsPlaceholderTabTitle(const std::wstring& title) {
-    return title.empty() || title == L"主页" || title == L"新标签页" || title == L"正在加载…";
+    return title.empty() || title == L"Home / Beranda" || title == L"New tab / Tab baru" || title == L"Loading / Memuat…";
 }
 
 BOOL CALLBACK ApplyControlTheme(HWND control, LPARAM useDarkValue) {
@@ -122,7 +122,7 @@ int Application::Run(HINSTANCE instance, int showCommand) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
-        ShowError(L"启动失败", L"无法初始化 COM。", comResult);
+        ShowError(L"Startup failed / Gagal memulai", L"Cannot initialize COM / Tidak dapat menginisialisasi COM.", comResult);
         return 1;
     }
     if (!Initialize(instance, showCommand)) {
@@ -195,7 +195,7 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
         initial.left, initial.top, initial.right - initial.left, initial.bottom - initial.top,
         nullptr, nullptr, instance_, this);
     if (!mainWindow_) {
-        ShowError(L"启动失败", L"无法创建主窗口。", HRESULT_FROM_WIN32(GetLastError()));
+        ShowError(L"Startup failed / Gagal memulai", L"Cannot create main window / Tidak dapat membuat jendela utama.", HRESULT_FROM_WIN32(GetLastError()));
         return false;
     }
     if (largeIcon_) SendMessageW(mainWindow_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(largeIcon_));
@@ -844,7 +844,7 @@ void Application::PaintMainWindow() {
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, theme_.Palette().secondaryText);
         if (uiFont_) SelectObject(dc, uiFont_);
-        DrawTextW(dc, L"正在切换标签页…", -1, &loading,
+        DrawTextW(dc, L"Switching tab / Mengganti tab…", -1, &loading,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
     EndPaint(mainWindow_, &paint);
@@ -856,7 +856,7 @@ void Application::DrawOwnerItem(const DRAWITEMSTRUCT& item) {
     if (item.CtlID == Tabs) {
         const int index = static_cast<int>(item.itemID);
         const std::wstring title = index >= 0 && index < static_cast<int>(state_.tabs.size())
-            ? FormatTabTitle(state_.tabs[static_cast<size_t>(index)].title) : L"新标签页";
+            ? FormatTabTitle(state_.tabs[static_cast<size_t>(index)].title) : L"New tab / Tab baru";
         theme_.DrawTab(item, title, index == TabCtrl_GetCurSel(tabControl_));
         if (oldFont) SelectObject(item.hDC, oldFont);
         return;
@@ -1020,7 +1020,7 @@ void Application::InitializeWebView() {
     auto options = Make<CoreWebView2EnvironmentOptions>();
     if (!options) {
         logs_.Write("webview.environment.options_failed");
-        ShowError(L"WebView2 初始化失败", L"无法创建 WebView2 环境选项。");
+        ShowError(L"WebView2 initialization failed / Inisialisasi WebView2 gagal", L"Cannot create WebView2 options / Tidak dapat membuat opsi WebView2.");
         return;
     }
     std::wstring browserArguments = L"--disable-sync";
@@ -1040,8 +1040,8 @@ void Application::InitializeWebView() {
                 if (FAILED(environmentResult) || !environment) {
                     logs_.Write("webview.environment.failed",
                         "hr=" + std::to_string(static_cast<unsigned long>(environmentResult)));
-                    ShowError(L"WebView2 初始化失败",
-                              L"请安装或修复 Microsoft Edge WebView2 Runtime。", environmentResult);
+                    ShowError(L"WebView2 initialization failed / Inisialisasi WebView2 gagal",
+                              L"Install or repair Microsoft Edge WebView2 Runtime / Pasang atau perbaiki runtime tersebut.", environmentResult);
                     return S_OK;
                 }
                 webViewEnvironment_ = environment;
@@ -1062,7 +1062,7 @@ void Application::InitializeWebView() {
                             if (FAILED(controllerResult) || !controller) {
                                 logs_.Write("webview.controller.failed",
                                     "hr=" + std::to_string(static_cast<unsigned long>(controllerResult)));
-                                ShowError(L"WebView2 初始化失败", L"无法创建网页视图。", controllerResult);
+                                ShowError(L"WebView2 initialization failed / Inisialisasi WebView2 gagal", L"Cannot create web view / Tidak dapat membuat tampilan web.", controllerResult);
                                 return S_OK;
                             }
                             webViewController_ = controller;
@@ -1070,7 +1070,7 @@ void Application::InitializeWebView() {
                                 "generation=" + std::to_string(generation));
                             if (FAILED(controller->get_CoreWebView2(&webView_)) || !webView_) {
                                 logs_.Write("webview.interface.failed");
-                                ShowError(L"WebView2 初始化失败", L"无法取得网页视图接口。");
+                                ShowError(L"WebView2 initialization failed / Inisialisasi WebView2 gagal", L"Cannot access the web view / Tidak dapat mengakses tampilan web.");
                                 return S_OK;
                             }
 
@@ -1100,7 +1100,7 @@ void Application::InitializeWebView() {
                             }
                             const HRESULT zoomResult = webZoom_.Attach(controller, webView_.get());
                             if (FAILED(zoomResult)) {
-                                ShowError(L"网页缩放初始化失败", L"无法监听网页缩放变化。", zoomResult);
+                                ShowError(L"Web zoom failed / Zoom web gagal", L"Cannot monitor web zoom / Tidak dapat memantau zoom web.", zoomResult);
                             }
                             webZoom_.Configure(state_.settings);
                             ResizeWebView();
@@ -1111,7 +1111,7 @@ void Application::InitializeWebView() {
                                     [this, generation](HRESULT result, PCWSTR) -> HRESULT {
                                         if (shuttingDown_ || generation != webViewGeneration_) return S_OK;
                                         if (FAILED(result)) {
-                                            ShowError(L"媒体控制初始化失败", L"网页仍可浏览，请重启小窗后重试。", result);
+                                            ShowError(L"Media controls failed / Kontrol media gagal", L"Browsing remains available; restart Veil Browser / Browser tetap dapat dipakai; mulai ulang Veil Browser.", result);
                                         }
                                         logs_.Write("webview.bootstrap.done",
                                             "generation=" + std::to_string(generation) +
@@ -1123,7 +1123,7 @@ void Application::InitializeWebView() {
                             if (FAILED(scriptResult)) {
                                 logs_.Write("webview.bootstrap.submit_failed",
                                     "hr=" + std::to_string(static_cast<unsigned long>(scriptResult)));
-                                ShowError(L"媒体控制初始化失败", L"网页仍可浏览，请重启小窗后重试。", scriptResult);
+                                ShowError(L"Media controls failed / Kontrol media gagal", L"Browsing remains available; restart Veil Browser / Browser tetap dapat dipakai; mulai ulang Veil Browser.", scriptResult);
                                 webViewReady_ = true;
                                 FinishInitialNavigation();
                             }
@@ -1132,14 +1132,14 @@ void Application::InitializeWebView() {
                 if (FAILED(creationResult)) {
                     logs_.Write("webview.controller.submit_failed",
                         "hr=" + std::to_string(static_cast<unsigned long>(creationResult)));
-                    ShowError(L"WebView2 初始化失败", L"无法创建网页视图。", creationResult);
+                    ShowError(L"WebView2 initialization failed / Inisialisasi WebView2 gagal", L"Cannot create web view / Tidak dapat membuat tampilan web.", creationResult);
                 }
                 return S_OK;
             }).Get());
     if (FAILED(result)) {
         logs_.Write("webview.environment.submit_failed",
             "hr=" + std::to_string(static_cast<unsigned long>(result)));
-        ShowError(L"WebView2 初始化失败", L"无法启动 WebView2 环境。", result);
+        ShowError(L"WebView2 initialization failed / Inisialisasi WebView2 gagal", L"Cannot start WebView2 / Tidak dapat menjalankan WebView2.", result);
     }
 }
 
@@ -1260,8 +1260,8 @@ bool Application::ConfigureWebViewEvents() {
                 return S_OK;
             }).Get(), &fullscreenToken_);
     if (FAILED(fullscreenRegistration)) {
-        ShowError(L"WebView2 全屏事件初始化失败",
-                  L"网页仍可在小窗内容区全屏，但 Esc 恢复和自动比例调整可能不可用。",
+        ShowError(L"Fullscreen event failed / Event layar penuh gagal",
+                  L"Web fullscreen remains available; Esc restore or auto sizing may fail / Layar penuh web tetap tersedia; pemulihan Esc atau ukuran otomatis mungkin gagal.",
                   fullscreenRegistration);
     }
     const HRESULT popupRegistration = webView_->add_NewWindowRequested(
@@ -1367,22 +1367,22 @@ void Application::RequestMediaDiagnostics() {
     if (!webView_) {
         const bool copied = CopyTextToClipboard(mainWindow_, base);
         MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_,
-                    (base + (copied ? L"\n\n诊断信息已复制到剪贴板。" :
-                                      L"\n\n无法写入剪贴板，请稍后重试。")).c_str(),
-                    L"小窗浏览器诊断", MB_OK | MB_ICONINFORMATION);
+                    (base + (copied ? L"\n\nDiagnostics copied / Diagnostik disalin." :
+                                      L"\n\nCannot write clipboard / Tidak dapat menulis clipboard.")).c_str(),
+                    L"Veil Browser diagnostics / Diagnostik", MB_OK | MB_ICONINFORMATION);
         return;
     }
     webView_->ExecuteScript(MediaBridge::DiagnosticScript().c_str(),
         Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
             [this, base = std::move(base)](HRESULT result, PCWSTR value) -> HRESULT {
                 std::wstring report = base;
-                report += L"\n活动媒体: ";
-                report += SUCCEEDED(result) && value ? DecodeExecuteScriptString(value) : L"无法读取";
+                report += L"\nActive media / Media aktif: ";
+                report += SUCCEEDED(result) && value ? DecodeExecuteScriptString(value) : L"Unavailable / Tidak tersedia";
                 const bool copied = CopyTextToClipboard(mainWindow_, report);
                 MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_,
-                            (report + (copied ? L"\n\n诊断信息已复制到剪贴板。" :
-                                                L"\n\n无法写入剪贴板，请稍后重试。")).c_str(),
-                            L"小窗浏览器诊断", MB_OK | MB_ICONINFORMATION);
+                            (report + (copied ? L"\n\nDiagnostics copied / Diagnostik disalin." :
+                                                L"\n\nCannot write clipboard / Tidak dapat menulis clipboard.")).c_str(),
+                            L"Veil Browser diagnostics / Diagnostik", MB_OK | MB_ICONINFORMATION);
                 return S_OK;
             }).Get());
 }
@@ -1623,7 +1623,7 @@ void Application::UpdateCurrentTabTitle(const std::wstring& title) {
     std::wstring display = FormatTabTitle(resolvedTitle);
     item.pszText = display.data();
     TabCtrl_SetItem(tabControl_, state_.currentTabIndex, &item);
-    SetWindowTextW(mainWindow_, (resolvedTitle + L" - 小窗浏览器").c_str());
+    SetWindowTextW(mainWindow_, (resolvedTitle + L" - Veil Browser").c_str());
 }
 
 void Application::UpdateCurrentTabUrl(const std::wstring& url) {
@@ -1664,7 +1664,7 @@ std::wstring Application::SuggestedTitleForUrl(const std::wstring& url) const {
             return tab.title;
         }
     }
-    if (_wcsicmp(url.c_str(), L"about:blank") == 0) return L"空白页";
+    if (_wcsicmp(url.c_str(), L"about:blank") == 0) return L"Blank / Kosong";
     const size_t scheme = url.find(L"://");
     if (scheme != std::wstring::npos) {
         const size_t hostStart = scheme + 3;
@@ -1672,7 +1672,7 @@ std::wstring Application::SuggestedTitleForUrl(const std::wstring& url) const {
         const std::wstring host = url.substr(hostStart, hostEnd - hostStart);
         if (!host.empty()) return host;
     }
-    return L"正在加载…";
+    return L"Loading / Memuat…";
 }
 
 void Application::HandleTabMouseDown(LPARAM lParam) {
@@ -1706,13 +1706,13 @@ void Application::ShowTabContextMenu(POINT screenPoint) {
 
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
-    AppendMenuW(menu, MF_STRING, kCloseCurrentTabCommand, L"关闭当前标签页");
+    AppendMenuW(menu, MF_STRING, kCloseCurrentTabCommand, L"Close tab / Tutup tab");
     AppendMenuW(menu, MF_STRING | (state_.tabs.size() <= 1 ? MF_GRAYED : 0),
-                kCloseOtherTabsCommand, L"关闭其他标签页");
+                kCloseOtherTabsCommand, L"Close other tabs / Tutup tab lain");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kCloseAllTabsCommand, L"关闭全部标签页");
+    AppendMenuW(menu, MF_STRING, kCloseAllTabsCommand, L"Close all tabs / Tutup semua tab");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kRepairWebViewCommand, L"网页白屏 / 无法操作？重建网页视图");
+    AppendMenuW(menu, MF_STRING, kRepairWebViewCommand, L"Repair web view / Perbaiki tampilan web");
     SetForegroundWindow(mainWindow_);
     const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                         screenPoint.x, screenPoint.y, 0, mainWindow_, nullptr);
@@ -1772,7 +1772,7 @@ void Application::ShowBookmarkMenu() {
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
     if (state_.bookmarks.empty()) {
-        AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, L"暂无书签");
+        AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, L"No bookmarks / Belum ada markah");
     } else {
         const std::wstring current = NormalizeComparableUrl(CurrentUrl());
         for (size_t index = 0; index < state_.bookmarks.size(); ++index) {
@@ -1790,7 +1790,7 @@ void Application::ShowBookmarkMenu() {
         }
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kManageBookmarksCommand, L"管理书签…");
+    AppendMenuW(menu, MF_STRING, kManageBookmarksCommand, L"Manage bookmarks / Kelola markah…");
 
     RECT button{};
     GetWindowRect(bookmarkButton_, &button);
@@ -1846,7 +1846,7 @@ void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) 
             logs_.Write("navigation.submit_failed",
                 "hr=" + std::to_string(static_cast<unsigned long>(result)));
             EndContentWait();
-            ShowError(L"导航失败", L"无法打开该地址。", result);
+            ShowError(L"Navigation failed / Navigasi gagal", L"Cannot open this address / Tidak dapat membuka alamat.", result);
         }
     }
 }
@@ -1992,11 +1992,11 @@ void Application::RefreshHotkeys() {
 
 void Application::ShowHotkeyErrors() {
     if (hotkeys_.RegistrationErrors().empty()) return;
-    std::wstring message = L"以下全局热键已被其他程序占用：\n\n";
+    std::wstring message = L"These global hotkeys are used by another app / Hotkey berikut dipakai aplikasi lain:\n\n";
     for (const std::wstring& error : hotkeys_.RegistrationErrors()) message += L"• " + error + L"\n";
-    message += L"\n可在“设置 → 快捷键”中重新指定。";
+    message += L"\nChange them in Settings / Ubah di Pengaturan.";
     MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_, message.c_str(),
-                L"热键冲突", MB_OK | MB_ICONWARNING);
+                L"Hotkey conflict / Konflik hotkey", MB_OK | MB_ICONWARNING);
 }
 
 void Application::AddTrayIcon() {
@@ -2008,7 +2008,7 @@ void Application::AddTrayIcon() {
     trayData_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
     trayData_.uCallbackMessage = kTrayMessage;
     trayData_.hIcon = smallIcon_ ? smallIcon_ : largeIcon_;
-    wcscpy_s(trayData_.szTip, L"小窗浏览器 v1.4");
+    wcscpy_s(trayData_.szTip, L"Veil Browser v0.2");
     trayIconAdded_ = Shell_NotifyIconW(NIM_ADD, &trayData_) != FALSE;
     if (trayIconAdded_) {
         trayData_.uVersion = NOTIFYICON_VERSION_4;
@@ -2032,10 +2032,10 @@ void Application::ShowTrayMenu() {
     GetCursorPos(&point);
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
-    AppendMenuW(menu, MF_STRING, 1, L"打开小窗");
-    AppendMenuW(menu, MF_STRING, 2, L"设置");
+    AppendMenuW(menu, MF_STRING, 1, L"Open / Buka Veil");
+    AppendMenuW(menu, MF_STRING, 2, L"Settings / Pengaturan");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, 3, L"退出程序");
+    AppendMenuW(menu, MF_STRING, 3, L"Exit / Keluar");
     SetForegroundWindow(mainWindow_);
     const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                         point.x, point.y, 0, mainWindow_, nullptr);
@@ -2066,8 +2066,8 @@ void Application::RestoreFromUserAction() {
 void Application::OpenLogFolder() {
     if (!logs_.EnsureDirectory()) {
         MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_,
-                    L"无法创建日志文件夹。请检查小窗所在文件夹是否具有写入权限。",
-                    L"日志不可用", MB_OK | MB_ICONWARNING);
+                    L"Cannot create log folder / Tidak dapat membuat folder log.",
+                    L"Logs unavailable / Log tidak tersedia", MB_OK | MB_ICONWARNING);
         return;
     }
     logs_.Write("logs.folder.opened");
@@ -2077,8 +2077,8 @@ void Application::OpenLogFolder() {
         L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     if (reinterpret_cast<INT_PTR>(opened) <= 32) {
         MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_,
-                    L"无法打开日志文件夹。请手动打开程序目录下的 logs 文件夹。",
-                    L"打开失败", MB_OK | MB_ICONWARNING);
+                    L"Cannot open log folder / Tidak dapat membuka folder log.",
+                    L"Open failed / Gagal membuka", MB_OK | MB_ICONWARNING);
     }
 }
 
@@ -2086,7 +2086,7 @@ void Application::ShowSettingsWindow() {
     if (windowModes_.IsHidden()) SetHidden(false);
     if (!settingsWindow_) {
         settingsWindow_ = CreateWindowExW(WS_EX_TOOLWINDOW, kSettingsWindowClass,
-            L"设置 · 小窗浏览器", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VSCROLL,
+            L"Settings / Pengaturan · Veil Browser", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VSCROLL,
             CW_USEDEFAULT, CW_USEDEFAULT, Scale(720), Scale(700), mainWindow_, nullptr, instance_, this);
         if (!settingsWindow_) return;
         CenterOwnedWindow(settingsWindow_, Scale(720), Scale(700));
@@ -2140,57 +2140,57 @@ void Application::CreateSettingsControls(HWND window) {
         return control;
     };
 
-    heading(L"常规");
-    label(L"主页地址", y);
+    heading(L"General / Umum");
+    label(L"Home URL / URL beranda", y);
     settingsControls_.home = edit(SettingsHome, y, fieldWidth);
     y += row;
-    settingsControls_.tray = checkbox(L"最小化时隐藏到系统托盘", SettingsTray, y);
+    settingsControls_.tray = checkbox(L"Minimize to tray / Minimalkan ke tray", SettingsTray, y);
     y += Scale(30);
-    settingsControls_.autoPause = checkbox(L"隐藏窗口时自动暂停视频", SettingsAutoPause, y);
+    settingsControls_.autoPause = checkbox(L"Pause video when hidden / Jeda video saat disembunyikan", SettingsAutoPause, y);
     y += Scale(30);
-    settingsControls_.fixedZoom = checkbox(L"固定网页缩放比例", SettingsFixedZoom, y);
+    settingsControls_.fixedZoom = checkbox(L"Lock web zoom / Kunci zoom web", SettingsFixedZoom, y);
     y += Scale(30);
-    label(L"网页缩放（%）", y);
+    label(L"Web zoom / Zoom web (%)", y);
     settingsControls_.zoomPercent = edit(SettingsZoomPercent, y, Scale(90));
     SendMessageW(settingsControls_.zoomPercent, EM_SETLIMITTEXT, 3, 0);
-    HWND zoomNote = CreateLabel(window, L"25–500%，默认 100%；启用后保持该比例");
+    HWND zoomNote = CreateLabel(window, L"25–500%, default / bawaan 100%");
     MoveWindow(zoomNote, fieldX + Scale(102), y + Scale(4), Scale(390), Scale(26), FALSE);
     y += row;
-    HWND zoomRefreshNote = CreateLabel(window, L"取消固定后，刷新网页恢复手动缩放；不会自动刷新以免打断播放。");
+    HWND zoomRefreshNote = CreateLabel(window, L"Reload after unlocking to reset zoom / Muat ulang setelah membuka kunci zoom.");
     MoveWindow(zoomRefreshNote, left, y, Scale(650), Scale(28), FALSE);
     y += Scale(32);
     // This adjusts when a *one-shot* white-screen health check starts.
     // The check never blindly refreshes a slowly loading page.
-    label(L"白屏检测等待", y);
+    label(L"Recovery delay / Jeda pemulihan", y);
     settingsControls_.blankPageCheck = edit(SettingsBlankPageCheck, y, Scale(90));
     SendMessageW(settingsControls_.blankPageCheck, EM_SETLIMITTEXT, 2, 0);
-    HWND blankCheckUnit = CreateLabel(window, L"秒");
+    HWND blankCheckUnit = CreateLabel(window, L"sec / detik");
     MoveWindow(blankCheckUnit, fieldX + Scale(102), y + Scale(4),
                Scale(42), Scale(24), FALSE);
     y += row;
     HWND blankCheckNote = CreateLabel(window,
-        L"3–30秒，默认5秒。仅检测网页响应，异常时尝试恢复，不会定时刷新。");
+        L"3–30 sec; responsiveness check only / 3–30 detik; hanya cek respons.");
     MoveWindow(blankCheckNote, left, y, Scale(650), Scale(28), FALSE);
     y += Scale(34);
     settingsControls_.autoFitFullscreen = checkbox(
-        L"网页视频全屏时自动按画面比例调整小窗大小", SettingsAutoFitFullscreen, y);
+        L"Fit window to fullscreen video / Sesuaikan jendela ke video penuh", SettingsAutoFitFullscreen, y);
     y += Scale(30);
     settingsControls_.lockFullscreenAspect = checkbox(
-        L"全屏后锁定画面比例（拖动边缘时等比缩放）",
+        L"Lock fullscreen aspect ratio / Kunci rasio layar penuh",
         SettingsLockFullscreenAspect, y);
     y += Scale(30);
     settingsControls_.maximizedTopDrag = checkbox(
-        L"小窗全屏时拖动顶部空白可还原并移动（关闭后仅按钮可退出）",
+        L"Drag top to restore / Seret atas untuk memulihkan",
         SettingsMaximizedTopDrag, y);
     y += Scale(42);
 
-    heading(L"沉浸");
-    label(L"挖孔半径（像素）", y);
+    heading(L"Pass-through / Tembus klik");
+    label(L"Pointer hole radius / Radius lubang penunjuk", y);
     settingsControls_.radius = edit(SettingsRadius, y, Scale(130));
     y += row;
     // Keep the input aligned with other settings. The localized label must
     // fit the common label column; show its unit next to the value instead.
-    label(L"挖孔刷新间隔", y);
+    label(L"Pointer refresh / Refresh penunjuk", y);
     settingsControls_.holeRefresh = edit(SettingsHoleRefresh, y, Scale(130));
     SendMessageW(settingsControls_.holeRefresh, EM_SETLIMITTEXT, 3, 0);
     HWND refreshUnit = CreateLabel(window, L"ms");
@@ -2200,18 +2200,18 @@ void Application::CreateSettingsControls(HWND window) {
     // A full-width, dedicated row prevents localization/DPI wrapping from
     // overlapping the next setting (the old inline 380px label was too narrow).
     HWND refreshNote = CreateLabel(window,
-        L"10–100ms，默认16ms。数值越小，跟随越快，资源开销可能增加。");
+        L"10–100ms; lower is faster but costs more / Lebih kecil lebih cepat namun lebih berat.");
     MoveWindow(refreshNote, left, y, Scale(650), Scale(28), FALSE);
     y += Scale(34);
-    label(L"吸附距离", y);
+    label(L"Snap distance / Jarak lekat", y);
     settingsControls_.snap = edit(SettingsSnap, y, Scale(130));
     y += row;
-    label(L"沉浸模式", y);
+    label(L"Pass mode / Mode tembus", y);
     settingsControls_.style = combo(SettingsStyle, y, Scale(230));
-    SendMessageW(settingsControls_.style, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"鼠标圆形挖孔"));
-    SendMessageW(settingsControls_.style, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"整体透明（移入隐藏）"));
+    SendMessageW(settingsControls_.style, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Pointer hole / Lubang penunjuk"));
+    SendMessageW(settingsControls_.style, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Transparent + click-through / Transparan + tembus klik"));
     y += row;
-    settingsControls_.opacityLabel = label(L"整体透明模式不透明度", y);
+    settingsControls_.opacityLabel = label(L"Opacity / Opasitas", y);
     settingsControls_.opacitySlider = CreateWindowExW(0, TRACKBAR_CLASSW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
         fieldX, y, Scale(330), Scale(32), window,
@@ -2223,19 +2223,19 @@ void Application::CreateSettingsControls(HWND window) {
     settingsControls_.opacityPercent = CreateLabel(window, L"%");
     MoveWindow(settingsControls_.opacityPercent, fieldX + Scale(428), y + Scale(4), Scale(30), Scale(24), FALSE);
     y += row;
-    settingsControls_.typing = checkbox(L"输入文字时暂停全部全局热键", SettingsTyping, y);
+    settingsControls_.typing = checkbox(L"Pause hotkeys while typing / Jeda hotkey saat mengetik", SettingsTyping, y);
     y += Scale(30);
-    settingsControls_.backgroundMedia = checkbox(L"窗口隐藏时仍允许全部媒体热键", SettingsBackgroundMedia, y);
+    settingsControls_.backgroundMedia = checkbox(L"Media hotkeys while hidden / Hotkey media saat tersembunyi", SettingsBackgroundMedia, y);
     y += Scale(44);
 
-    heading(L"快捷键（点击后按下新按键，可组合 Ctrl / Alt / Shift）");
+    heading(L"Hotkeys / Tombol pintas (Ctrl / Alt / Shift)");
     const auto defaults = DefaultHotkeys();
     for (size_t index = 0; index < kHotkeyCount; ++index) {
         label(defaults[index].displayName.c_str(), y);
         settingsControls_.hotkeys[index] = CreateThemedButton(
             window, L"", SettingsHotkeyBase + static_cast<int>(index));
         MoveWindow(settingsControls_.hotkeys[index], fieldX, y, Scale(270), Scale(29), FALSE);
-        settingsControls_.hotkeyEnabled[index] = CreateWindowExW(0, L"BUTTON", L"启用",
+        settingsControls_.hotkeyEnabled[index] = CreateWindowExW(0, L"BUTTON", L"Enable / Aktif",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
             fieldX + Scale(286), y, Scale(100), Scale(29), window,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(
@@ -2245,48 +2245,48 @@ void Application::CreateSettingsControls(HWND window) {
     }
     y += Scale(12);
 
-    heading(L"性能与外观");
-    label(L"长按快进倍速", y);
+    heading(L"Performance & appearance / Performa & tampilan");
+    label(L"Hold seek speed / Kecepatan tekan lama", y);
     settingsControls_.holdRate = combo(SettingsHoldRate, y, Scale(150));
     for (int rate = 2; rate <= 5; ++rate) {
         const std::wstring text = std::to_wstring(rate) + L"×";
         SendMessageW(settingsControls_.holdRate, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
     }
     y += row;
-    label(L"网页渲染模式", y);
+    label(L"Rendering / Render web", y);
     settingsControls_.renderMode = combo(SettingsRenderMode, y, Scale(260));
-    SendMessageW(settingsControls_.renderMode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"自动 GPU（推荐）"));
-    SendMessageW(settingsControls_.renderMode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"软件兼容模式（需重启）"));
+    SendMessageW(settingsControls_.renderMode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Automatic GPU / GPU otomatis"));
+    SendMessageW(settingsControls_.renderMode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Software compatibility / Kompatibilitas software"));
     y += row;
-    label(L"界面主题", y);
+    label(L"Theme / Tema", y);
     settingsControls_.theme = combo(SettingsTheme, y, Scale(220));
-    SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"跟随系统"));
-    SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"浅色"));
-    SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"深色"));
+    SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"System / Sistem"));
+    SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Light / Terang"));
+    SendMessageW(settingsControls_.theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Dark / Gelap"));
     y += Scale(40);
-    heading(L"日志");
+    heading(L"Logs / Log");
     settingsControls_.logAutoClean = checkbox(
-        L"自动清理旧日志", SettingsLogAutoClean, y);
+        L"Clean old logs / Bersihkan log lama", SettingsLogAutoClean, y);
     y += row;
-    label(L"日志保留时间", y);
+    label(L"Log retention / Masa simpan log", y);
     settingsControls_.logRetention = combo(SettingsLogRetention, y, Scale(150));
     for (const int days : {3, 7, 30}) {
-        const std::wstring text = std::to_wstring(days) + L" 天";
+        const std::wstring text = std::to_wstring(days) + L" days / hari";
         SendMessageW(settingsControls_.logRetention, CB_ADDSTRING, 0,
                      reinterpret_cast<LPARAM>(text.c_str()));
     }
     y += row;
     HWND logNote = CreateLabel(window,
-        L"日志与 config.ini 同级的 logs 文件夹；不记录网址、搜索词或 Cookie。");
+        L"Logs exclude URLs, searches, and cookies / Log tidak merekam URL, pencarian, atau cookie.");
     MoveWindow(logNote, left, y, Scale(650), Scale(28), FALSE);
     y += Scale(34);
-    settingsControls_.diagnostics = CreateThemedButton(window, L"打开日志文件夹", SettingsDiagnostics);
+    settingsControls_.diagnostics = CreateThemedButton(window, L"Open logs / Buka log", SettingsDiagnostics);
     MoveWindow(settingsControls_.diagnostics, fieldX, y, Scale(190), Scale(32), FALSE);
-    settingsControls_.about = CreateThemedButton(window, L"关于 v1.4", SettingsAbout);
+    settingsControls_.about = CreateThemedButton(window, L"About / Tentang", SettingsAbout);
     MoveWindow(settingsControls_.about, fieldX + Scale(202), y, Scale(130), Scale(32), FALSE);
-    settingsControls_.repository = CreateThemedButton(window, L"GitHub 项目主页", SettingsRepository);
+    settingsControls_.repository = CreateThemedButton(window, L"GitHub source / Sumber", SettingsRepository);
     MoveWindow(settingsControls_.repository, fieldX + Scale(344), y, Scale(160), Scale(32), FALSE);
-    HWND restartNote = CreateLabel(window, L"渲染模式变更将在下次启动时生效。独占全屏游戏可能绕过 DWM，普通窗口无法覆盖。");
+    HWND restartNote = CreateLabel(window, L"Rendering changes require restart. Nonstandard capture may bypass protection / Perubahan render perlu restart; capture nonstandar dapat melewati proteksi.");
     MoveWindow(restartNote, left, y + Scale(44), Scale(650), Scale(48), FALSE);
     y += Scale(102);
 
@@ -2440,7 +2440,7 @@ void Application::BeginHotkeyCapture(HotkeyAction action) {
     CancelHotkeyCapture();
     captureAction_ = action;
     HWND button = settingsControls_.hotkeys[HotkeyIndex(action)];
-    SetWindowTextW(button, L"请按新按键…（Esc 取消）");
+    SetWindowTextW(button, L"Press a key / Tekan tombol (Esc cancels)");
     SetFocus(button ? button : settingsWindow_);
     RefreshHotkeys();
     hotkeys_.BeginMouseCapture([this](UINT key, UINT modifiers) {
@@ -2474,7 +2474,7 @@ void Application::ApplyCapturedHotkey(UINT virtualKey, UINT modifiers) {
     for (size_t index = 0; index < kHotkeyCount; ++index) {
         if (index != target && state_.hotkeys[index].virtualKey == virtualKey &&
             state_.hotkeys[index].modifiers == modifiers) {
-            MessageBoxW(settingsWindow_, L"该组合已被另一项小窗功能使用。", L"快捷键重复",
+            MessageBoxW(settingsWindow_, L"This shortcut is already used / Pintasan sudah dipakai.", L"Duplicate shortcut / Pintasan duplikat",
                         MB_OK | MB_ICONWARNING);
             CancelHotkeyCapture();
             return;
@@ -2545,11 +2545,11 @@ LRESULT Application::HandleSettingsMessage(HWND window, UINT message, WPARAM wPa
         }
         if (id == SettingsAbout) {
             MessageBoxW(window,
-                L"小窗浏览器 v1.4.5\n\n"
-                L"专为单屏玩家打造的 Windows 画中画浏览器\n"
+                L"Veil Browser v0.2.0\n\n"
+                L"Lightweight Windows overlay browser / Browser overlay Windows ringan\n"
                 L"C++20 / Win32 / WebView2 1.0.4078.44\n\n"
                 L"https://github.com/azurplain/Mini-Window-Browser",
-                L"关于小窗浏览器", MB_OK | MB_ICONINFORMATION);
+                L"About / Tentang Veil Browser", MB_OK | MB_ICONINFORMATION);
             return 0;
         }
         if (id == SettingsRepository) {
@@ -2557,8 +2557,8 @@ LRESULT Application::HandleSettingsMessage(HWND window, UINT message, WPARAM wPa
                 window, L"open", L"https://github.com/azurplain/Mini-Window-Browser",
                 nullptr, nullptr, SW_SHOWNORMAL);
             if (reinterpret_cast<INT_PTR>(opened) <= 32) {
-                MessageBoxW(window, L"无法打开浏览器，请手动访问仓库地址。",
-                            L"打开失败", MB_OK | MB_ICONWARNING);
+                MessageBoxW(window, L"Cannot open the source URL / Tidak dapat membuka URL sumber.",
+                            L"Open failed / Gagal membuka", MB_OK | MB_ICONWARNING);
             }
             return 0;
         }
@@ -2671,7 +2671,7 @@ LRESULT Application::HandleSettingsMessage(HWND window, UINT message, WPARAM wPa
 void Application::ShowBookmarkWindow() {
     if (!bookmarkWindow_) {
         bookmarkWindow_ = CreateWindowExW(WS_EX_TOOLWINDOW, kBookmarkWindowClass,
-            L"书签 · 小窗浏览器", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME,
+            L"Bookmarks / Markah · Veil Browser", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME,
             CW_USEDEFAULT, CW_USEDEFAULT, Scale(650), Scale(500), mainWindow_, nullptr, instance_, this);
         if (!bookmarkWindow_) return;
         CenterOwnedWindow(bookmarkWindow_, Scale(650), Scale(500));
@@ -2686,21 +2686,21 @@ void Application::CreateBookmarkControls(HWND window) {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
         Scale(18), Scale(18), Scale(240), Scale(400), window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(BookmarkList)), instance_, nullptr);
-    HWND titleLabel = CreateLabel(window, L"标题");
+    HWND titleLabel = CreateLabel(window, L"Title / Judul");
     MoveWindow(titleLabel, Scale(282), Scale(24), Scale(70), Scale(24), FALSE);
     bookmarkControls_.title = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL,
         Scale(282), Scale(52), Scale(330), Scale(30), window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(BookmarkTitle)), instance_, nullptr);
-    HWND urlLabel = CreateLabel(window, L"网址");
+    HWND urlLabel = CreateLabel(window, L"URL / Alamat");
     MoveWindow(urlLabel, Scale(282), Scale(98), Scale(70), Scale(24), FALSE);
     bookmarkControls_.url = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL,
         Scale(282), Scale(126), Scale(330), Scale(90), window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(BookmarkUrl)), instance_, nullptr);
-    HWND save = CreateThemedButton(window, L"保存 / 新增", BookmarkSave);
-    HWND open = CreateThemedButton(window, L"打开", BookmarkOpen);
-    HWND remove = CreateThemedButton(window, L"删除", BookmarkDelete);
+    HWND save = CreateThemedButton(window, L"Save / Simpan", BookmarkSave);
+    HWND open = CreateThemedButton(window, L"Open / Buka", BookmarkOpen);
+    HWND remove = CreateThemedButton(window, L"Delete / Hapus", BookmarkDelete);
     MoveWindow(save, Scale(282), Scale(242), Scale(126), Scale(34), FALSE);
     MoveWindow(open, Scale(420), Scale(242), Scale(92), Scale(34), FALSE);
     MoveWindow(remove, Scale(520), Scale(242), Scale(92), Scale(34), FALSE);
@@ -2825,7 +2825,7 @@ LRESULT Application::HandleBookmarkMessage(HWND window, UINT message, WPARAM wPa
 void Application::ShowPresetWindow() {
     if (!presetWindow_) {
         presetWindow_ = CreateWindowExW(WS_EX_TOOLWINDOW, kPresetWindowClass,
-            L"场景预设 · 小窗浏览器", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME,
+            L"Scenes / Skenario · Veil Browser", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME,
             CW_USEDEFAULT, CW_USEDEFAULT, Scale(620), Scale(490), mainWindow_, nullptr, instance_, this);
         if (!presetWindow_) return;
         CenterOwnedWindow(presetWindow_, Scale(620), Scale(490));
@@ -2840,24 +2840,24 @@ void Application::CreatePresetControls(HWND window) {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
         Scale(18), Scale(18), Scale(250), Scale(365), window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(PresetList)), instance_, nullptr);
-    HWND label = CreateLabel(window, L"预设名称");
+    HWND label = CreateLabel(window, L"Scene name / Nama skenario");
     MoveWindow(label, Scale(292), Scale(24), Scale(220), Scale(24), FALSE);
     presetControls_.name = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL,
         Scale(292), Scale(54), Scale(290), Scale(30), window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(PresetName)), instance_, nullptr);
-    HWND apply = CreateThemedButton(window, L"一键应用", PresetApply);
-    HWND add = CreateThemedButton(window, L"保存当前场景", PresetAdd);
-    HWND rename = CreateThemedButton(window, L"重命名", PresetSaveName);
-    HWND remove = CreateThemedButton(window, L"删除", PresetDelete);
-    HWND reset = CreateThemedButton(window, L"恢复默认设置", PresetReset);
+    HWND apply = CreateThemedButton(window, L"Apply / Terapkan", PresetApply);
+    HWND add = CreateThemedButton(window, L"Save scene / Simpan skenario", PresetAdd);
+    HWND rename = CreateThemedButton(window, L"Rename / Ganti nama", PresetSaveName);
+    HWND remove = CreateThemedButton(window, L"Delete / Hapus", PresetDelete);
+    HWND reset = CreateThemedButton(window, L"Reset / Atur ulang", PresetReset);
     MoveWindow(apply, Scale(292), Scale(110), Scale(140), Scale(35), FALSE);
     MoveWindow(add, Scale(442), Scale(110), Scale(140), Scale(35), FALSE);
     MoveWindow(rename, Scale(292), Scale(158), Scale(140), Scale(35), FALSE);
     MoveWindow(remove, Scale(442), Scale(158), Scale(140), Scale(35), FALSE);
     MoveWindow(reset, Scale(292), Scale(220), Scale(180), Scale(35), FALSE);
     HWND note = CreateWindowExW(0, L"STATIC",
-        L"预设保存窗口、沉浸参数、热键及全部标签页；主题和 GPU 模式保持全局。\r\n\r\n应用预设不会删除书签；会恢复保存时的标签页。",
+        L"Scenes save window, pass-through, hotkeys, and tabs / Skenario menyimpan jendela, mode tembus, hotkey, dan tab.",
         WS_CHILD | WS_VISIBLE | SS_LEFT | SS_EDITCONTROL | SS_NOPREFIX,
         Scale(292), Scale(272), Scale(290), Scale(130), window, nullptr, instance_, nullptr);
     const HWND controls[] = {presetControls_.list, presetControls_.name, label, apply,
@@ -2891,7 +2891,7 @@ void Application::AddCurrentPreset() {
         names.reserve(state_.presets.size());
         for (const Preset& preset : state_.presets) names.push_back(preset.name);
         do {
-            name = L"场景 " + std::to_wstring(suffix++);
+            name = L"Scene / Skenario " + std::to_wstring(suffix++);
         } while (HasPresetNameConflict(names, name));
     } else if (!NormalizeAndValidatePresetName(name, -1)) {
         return;
@@ -2915,19 +2915,19 @@ bool Application::NormalizeAndValidatePresetName(std::wstring& name, int ignored
     const size_t ignored = ignoredIndex < 0 ? static_cast<size_t>(-1)
         : static_cast<size_t>(ignoredIndex);
     if (name.empty()) {
-        MessageBoxW(presetWindow_, L"预设名称不能为空。", L"名称无效", MB_OK | MB_ICONWARNING);
+        MessageBoxW(presetWindow_, L"Scene name is required / Nama skenario wajib.", L"Invalid name / Nama tidak valid", MB_OK | MB_ICONWARNING);
         return false;
     }
     if (HasPresetNameConflict(names, name, ignored)) {
-        MessageBoxW(presetWindow_, L"已存在同名预设，请换一个名称。", L"名称重复", MB_OK | MB_ICONWARNING);
+        MessageBoxW(presetWindow_, L"Scene name already exists / Nama skenario sudah ada.", L"Duplicate name / Nama duplikat", MB_OK | MB_ICONWARNING);
         return false;
     }
     return true;
 }
 
 void Application::ResetToDefaults() {
-    if (MessageBoxW(presetWindow_, L"恢复默认窗口与功能设置？书签和标签页不会删除。",
-                    L"恢复默认", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+    if (MessageBoxW(presetWindow_, L"Reset window and feature settings? / Atur ulang jendela dan fitur?",
+                    L"Reset / Atur ulang", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
     const ThemeMode retainedTheme = state_.settings.themeMode;
     const RenderMode retainedRender = state_.settings.renderMode;
     state_.settings = AppSettings{};
@@ -3140,7 +3140,7 @@ void Application::CenterOwnedWindow(HWND window, int width, int height) const {
 }
 
 void Application::ShowError(const wchar_t* title, const wchar_t* message, HRESULT result) const {
-    std::wstring text = message ? message : L"发生未知错误。";
+    std::wstring text = message ? message : L"Unknown error / Kesalahan tidak diketahui.";
     if (FAILED(result)) {
         wchar_t system[512]{};
         const DWORD flags = FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
@@ -3152,7 +3152,7 @@ void Application::ShowError(const wchar_t* title, const wchar_t* message, HRESUL
         }
         wchar_t code[24]{};
         swprintf_s(code, L"0x%08X", static_cast<unsigned int>(result));
-        text += L"\n错误代码：";
+        text += L"\nError / Kode kesalahan: ";
         text += code;
     }
     MessageBoxW(mainWindow_, text.c_str(), title, MB_OK | MB_ICONERROR);

@@ -139,12 +139,12 @@ bool ConfigStore::Load(AppState& state) const {
     for (int index = 0; index < tabCount; ++index) {
         TabData tab;
         tab.url = ReadString(path_, kSession, L"TabUrl" + std::to_wstring(index), state.settings.homeUrl);
-        tab.title = ReadString(path_, kSession, L"TabTitle" + std::to_wstring(index), L"正在加载…");
+        tab.title = ReadString(path_, kSession, L"TabTitle" + std::to_wstring(index), L"Loading / Memuat…");
         if (tab.url.empty() || tab.url == L"0") tab.url = state.settings.homeUrl;
         state.tabs.push_back(std::move(tab));
     }
     if (state.tabs.empty()) {
-        state.tabs.push_back({L"正在加载…", state.settings.homeUrl});
+        state.tabs.push_back({L"Loading / Memuat…", state.settings.homeUrl});
     }
     state.currentTabIndex = std::clamp(state.session.activeTab, 0, static_cast<int>(state.tabs.size()) - 1);
 
@@ -156,7 +156,7 @@ bool ConfigStore::Load(AppState& state) const {
     const int bookmarkCount = std::clamp(ReadInt(path_, kBookmarks, L"Count", 0), 0, 1000);
     for (int index = 0; index < bookmarkCount; ++index) {
         Bookmark bookmark;
-        bookmark.title = ReadString(path_, kBookmarks, L"Title" + std::to_wstring(index), L"书签");
+        bookmark.title = ReadString(path_, kBookmarks, L"Title" + std::to_wstring(index), L"Bookmark / Markah");
         bookmark.url = ReadString(path_, kBookmarks, L"Url" + std::to_wstring(index));
         if (!bookmark.url.empty()) state.bookmarks.push_back(std::move(bookmark));
     }
@@ -166,7 +166,7 @@ bool ConfigStore::Load(AppState& state) const {
     for (int index = 0; index < presetCount; ++index) {
         Preset preset;
         const std::wstring prefix = L"P" + std::to_wstring(index) + L"_";
-        preset.name = ReadString(path_, kPresets, prefix + L"Name", L"预设");
+        preset.name = ReadString(path_, kPresets, prefix + L"Name", L"Scene / Skenario");
         preset.normalRect = MakeRect(
             ReadInt(path_, kPresets, prefix + L"X", 100), ReadInt(path_, kPresets, prefix + L"Y", 100),
             ReadInt(path_, kPresets, prefix + L"W", 1000), ReadInt(path_, kPresets, prefix + L"H", 600));
@@ -198,11 +198,11 @@ bool ConfigStore::Load(AppState& state) const {
             const std::wstring tabPrefix = prefix + L"Tab" + std::to_wstring(tabIndex) + L"_";
             TabData tab;
             tab.url = ReadString(path_, kPresets, tabPrefix + L"Url");
-            tab.title = ReadString(path_, kPresets, tabPrefix + L"Title", L"正在加载…");
+            tab.title = ReadString(path_, kPresets, tabPrefix + L"Title", L"Loading / Memuat…");
             if (!tab.url.empty()) preset.tabs.push_back(std::move(tab));
         }
         if (preset.tabs.empty()) {
-            preset.tabs.push_back({ReadString(path_, kPresets, prefix + L"CurTitle", L"正在加载…"),
+            preset.tabs.push_back({ReadString(path_, kPresets, prefix + L"CurTitle", L"Loading / Memuat…"),
                                    preset.currentUrl});
         }
         preset.activeTab = std::clamp(ReadInt(path_, kPresets, prefix + L"ActiveTab", 0), 0,
@@ -302,7 +302,7 @@ bool ConfigStore::Save(const AppState& state, const RECT& normalRect, bool maxim
         const std::wstring currentTitle = !preset.tabs.empty()
             ? preset.tabs[static_cast<size_t>(std::clamp(
                 preset.activeTab, 0, static_cast<int>(preset.tabs.size()) - 1))].title
-            : L"正在加载…";
+            : L"Loading / Memuat…";
         WriteString(transactionPath, kPresets, prefix + L"CurTitle", currentTitle);
         WriteInt(transactionPath, kPresets, prefix + L"TabCount", static_cast<int>(preset.tabs.size()));
         WriteInt(transactionPath, kPresets, prefix + L"ActiveTab", preset.activeTab);
@@ -395,9 +395,9 @@ std::wstring HotkeyDisplayText(const HotkeyBinding& binding) {
     case VK_UP: text += L"Up"; break;
     case VK_DOWN: text += L"Down"; break;
     case VK_OEM_3: text += L"`"; break;
-    case VK_MBUTTON: text += L"鼠标中键"; break;
-    case VK_XBUTTON1: text += L"鼠标侧键1"; break;
-    case VK_XBUTTON2: text += L"鼠标侧键2"; break;
+    case VK_MBUTTON: text += L"Middle mouse / Mouse tengah"; break;
+    case VK_XBUTTON1: text += L"Mouse side 1 / Mouse samping 1"; break;
+    case VK_XBUTTON2: text += L"Mouse side 2 / Mouse samping 2"; break;
     default: {
         wchar_t name[64]{};
         const UINT scanCode = MapVirtualKeyW(binding.virtualKey, MAPVK_VK_TO_VSC);

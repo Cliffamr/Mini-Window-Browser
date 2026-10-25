@@ -37,8 +37,8 @@ IDI_SMALL               ICON         "assets\\XiaoChuang.ico"
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,4,5,0
- PRODUCTVERSION 1,4,5,0
+ FILEVERSION 0,2,0,0
+ PRODUCTVERSION 0,2,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -54,13 +54,13 @@ BEGIN
         BLOCK "080404b0"
         BEGIN
             VALUE "CompanyName", "AzurPlain\0"
-            VALUE "FileDescription", "小窗浏览器 - Windows 画中画浏览器\0"
-            VALUE "FileVersion", "1.4.5.0\0"
-            VALUE "InternalName", "XiaoChuang\0"
+            VALUE "FileDescription", "Veil Browser - Windows overlay browser\0"
+            VALUE "FileVersion", "0.2.0.0\0"
+            VALUE "InternalName", "VeilBrowser\0"
             VALUE "LegalCopyright", "Copyright (c) 2026 AzurPlain\0"
-            VALUE "OriginalFilename", "XiaoChuang.exe\0"
-            VALUE "ProductName", "小窗浏览器\0"
-            VALUE "ProductVersion", "1.4.5\0"
+            VALUE "OriginalFilename", "VeilBrowser.exe\0"
+            VALUE "ProductName", "Veil Browser\0"
+            VALUE "ProductVersion", "0.2.0\0"
         END
     END
     BLOCK "VarFileInfo"
@@ -76,13 +76,13 @@ END
 
 IDC_MY MENU
 BEGIN
-    POPUP "文件(&F)"
+    POPUP "File / Berkas (&F)"
     BEGIN
-        MENUITEM "退出(&X)",                IDM_EXIT
+        MENUITEM "Exit / Keluar (&X)",                IDM_EXIT
     END
-    POPUP "帮助(&H)"
+    POPUP "Help / Bantuan (&H)"
     BEGIN
-        MENUITEM "关于(&A) ...",           IDM_ABOUT
+        MENUITEM "About / Tentang (&A) ...",           IDM_ABOUT
     END
 END
 
@@ -106,13 +106,13 @@ END
 
 IDD_ABOUTBOX DIALOGEX 0, 0, 170, 62
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "关于 小窗"
+CAPTION "About / Tentang Veil Browser"
 FONT 9, "MS Shell Dlg"
 BEGIN
     ICON            IDI_MY,IDC_STATIC,14,14,21,20
-    LTEXT           "小窗浏览器, 版本 1.4.5",IDC_STATIC,42,14,114,8,SS_NOPREFIX
-    LTEXT           "版权所有(c) 2026",IDC_STATIC,42,26,114,8
-    DEFPUSHBUTTON   "确定",IDOK,113,41,50,14,WS_GROUP
+    LTEXT           "Veil Browser, version 0.2.0",IDC_STATIC,42,14,114,8,SS_NOPREFIX
+    LTEXT           "Copyright (c) 2026",IDC_STATIC,42,26,114,8
+    DEFPUSHBUTTON   "OK",IDOK,113,41,50,14,WS_GROUP
 END
 
 /////////////////////////////////////////////////////////////////////////////
@@ -170,7 +170,7 @@ END
 STRINGTABLE
 BEGIN
    IDC_MY   "MY"
-   IDS_APP_TITLE       "小窗"
+   IDS_APP_TITLE       "Veil Browser"
 END
 
 #endif

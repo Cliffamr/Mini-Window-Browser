@@ -62,13 +62,13 @@ struct HotkeyBinding {
 
 inline std::array<HotkeyBinding, kHotkeyCount> DefaultHotkeys() {
     return {{
-        {101, 0, L'0', L"沉浸模式"},
-        {102, 0, VK_OEM_3, L"播放/暂停"},
-        {103, 0, L'5', L"快退"},
-        {104, 0, L'6', L"快进"},
-        {105, 0, L'7', L"上一集"},
-        {106, 0, L'8', L"下一集"},
-        {107, 0, L'9', L"隐藏/显示"},
+        {101, 0, L'0', L"Pass-through / Tembus klik"},
+        {102, 0, VK_OEM_3, L"Play/Pause / Putar/Jeda"},
+        {103, 0, L'5', L"Seek back / Mundur"},
+        {104, 0, L'6', L"Seek forward / Maju"},
+        {105, 0, L'7', L"Previous / Sebelumnya"},
+        {106, 0, L'8', L"Next / Berikutnya"},
+        {107, 0, L'9', L"Hide/Show / Sembunyikan/Tampilkan"},
     }};
 }
 
@@ -126,7 +126,7 @@ struct Bookmark {
 };
 
 struct Preset {
-    std::wstring name = L"预设";
+    std::wstring name = L"Scene / Skenario";
     RECT normalRect{100, 100, 1100, 700};
     bool maximized = false;
     int holeRadius = 400;
