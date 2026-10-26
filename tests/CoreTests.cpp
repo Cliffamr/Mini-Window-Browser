@@ -3,7 +3,7 @@
 #include "../src/CoreLogic.h"
 #include "../src/Diagnostics.h"
 #include "../src/LogStore.h"
-#include "../src/MediaBridge.h"
+
 
 #include <windows.h>
 
@@ -251,10 +251,18 @@ void TestVeilBrowserPolicy() {
     Check(CanCreateTab(0) && CanCreateTab(4) && !CanCreateTab(5),
           L"tab keenam ditolak");
     Check(IsSupportedWebNavigationUrl(L"https://example.com/path"), L"HTTPS diizinkan");
+    Check(IsSupportedWebNavigationUrl(L"https://[::1]/"), L"IPv6 HTTPS valid diizinkan");
     Check(IsSupportedWebNavigationUrl(L"ABOUT:BLANK"), L"about:blank diizinkan");
     Check(!IsSupportedWebNavigationUrl(L"http://example.com"), L"HTTP ditolak");
     Check(!IsSupportedWebNavigationUrl(L"file:///C:/secret.txt"), L"file URL ditolak");
     Check(!IsSupportedWebNavigationUrl(L"https://"), L"HTTPS tanpa host ditolak");
+    Check(!IsSupportedWebNavigationUrl(L"https://user@example.com"), L"userinfo ditolak");
+    Check(!IsSupportedWebNavigationUrl(L"https://exa mple.com"), L"spasi host ditolak");
+    Check(!IsSupportedWebNavigationUrl(L"https://example.com\\@evil.test"), L"backslash host ditolak");
+    Check(!IsSupportedWebNavigationUrl(L"https://example..com"), L"label host kosong ditolak");
+    Check(!IsSupportedWebNavigationUrl(L"https://example.com:bad"), L"port tidak valid ditolak");
+    Check(!IsSupportedWebNavigationUrl(L"https://[::1"), L"IPv6 tidak lengkap ditolak");
+    Check(!IsSupportedWebNavigationUrl(L"https://not:ipv6/"), L"host bertitik dua palsu ditolak");
     Check(TopmostInsertAfter(true) == HWND_TOPMOST &&
           TopmostInsertAfter(false) == HWND_NOTOPMOST,
           L"toggle always-on-top memilih z-order yang benar");
@@ -340,43 +348,6 @@ void TestRawMouseButtons() {
     Check(DecodeRawMouseButtons(0).empty(), L"Raw Input 忽略无关鼠标移动");
 }
 
-void TestMediaBridgeCommands() {
-    using namespace xiaochuang;
-    const std::wstring bootstrap = MediaBridge::BootstrapScript();
-    Check(bootstrap.find(L"window.player || window.bilibiliPlayer") != std::wstring::npos,
-          L"Bilibili 普通视频上一集下一集使用播放器接口");
-    const size_t bangumiFallback = bootstrap.find(
-        L"if (isBangumi && clickFirst(selectors)) return true;");
-    const size_t bilibiliPlayerCall = bootstrap.find(
-        L"if (callPlayerMethod(player, direction < 0 ? 'prev' : 'next')) return true;");
-    Check(bangumiFallback != std::wstring::npos && bilibiliPlayerCall != std::wstring::npos &&
-          bangumiFallback < bilibiliPlayerCall,
-          L"Bilibili 番剧先点击有效的前后集按钮再尝试空操作播放器接口");
-    Check(bootstrap.find(L"element.shadowRoot") != std::wstring::npos,
-          L"媒体按钮适配支持开放 Shadow DOM");
-    Check(bootstrap.find(L"[data-action=\"previous\"]") != std::wstring::npos &&
-          bootstrap.find(L"[data-action=\"next\"]") != std::wstring::npos,
-          L"未知站点使用保守的上一集下一集回退");
-    Check(bootstrap.find(L"MWB_MEDIA_COMMAND_V1") != std::wstring::npos &&
-          bootstrap.find(L"event.source !== window.parent") != std::wstring::npos,
-          L"子框架媒体命令仅接受直接父框架广播");
-
-    Check(MediaBridge::CommandScript(MediaCommand::TogglePlay).find(L"'togglePlay'") != std::wstring::npos,
-          L"播放暂停命令映射正确");
-    Check(MediaBridge::CommandScript(MediaCommand::SeekBackward).find(L"'seekBackward'") != std::wstring::npos,
-          L"快退命令映射正确");
-    Check(MediaBridge::CommandScript(MediaCommand::SeekForward).find(L"'seekForward'") != std::wstring::npos,
-          L"快进命令映射正确");
-    Check(MediaBridge::CommandScript(MediaCommand::Previous).find(L"'previous'") != std::wstring::npos,
-          L"上一集命令映射正确");
-    Check(MediaBridge::CommandScript(MediaCommand::Next).find(L"'next'") != std::wstring::npos,
-          L"下一集命令映射正确");
-    Check(MediaBridge::CommandScript(MediaCommand::Next).find(L"window.frames.length") != std::wstring::npos &&
-          MediaBridge::CommandScript(MediaCommand::Next).find(L"frame.postMessage") != std::wstring::npos,
-          L"顶层页面找不到媒体时向子框架转发命令");
-    Check(MediaBridge::CommandScript(MediaCommand::HoldBackward, 99).find(L"const value=5;") != std::wstring::npos,
-          L"长按倍速在媒体命令层限制为 2 到 5 倍");
-}
 
 void TestPresetNames() {
     using namespace xiaochuang;
@@ -508,7 +479,7 @@ int wmain() {
     TestHoldGestures();
     TestInputAndMediaSelection();
     TestRawMouseButtons();
-    TestMediaBridgeCommands();
+
     TestPresetNames();
     TestWindowGeometryHelpers();
     TestScriptResultDecoding();

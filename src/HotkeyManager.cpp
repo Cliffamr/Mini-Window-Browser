@@ -257,7 +257,8 @@ LRESULT CALLBACK HotkeyManager::KeyboardHookProc(int code, WPARAM message, LPARA
     const auto* keyboard = reinterpret_cast<const KBDLLHOOKSTRUCT*>(data);
     const UINT virtualKey = keyboard->vkCode;
     if (virtualKey == VK_ESCAPE && instance_->suppressEscapeForFocusedWebView_.load() &&
-        foregroundProcess == GetCurrentProcessId() && !instance_->captureCallback_) {
+        !instance_->captureCallback_) {
+        if (down) PostMessageW(instance_->window_, WM_KEYDOWN, VK_ESCAPE, 0);
         return 1;
     }
     if (foregroundProcess == GetCurrentProcessId()) {
@@ -386,6 +387,7 @@ bool HotkeyManager::NeedsRawMouseInput() const {
 }
 
 bool HotkeyManager::IsActionActive(HotkeyAction action) const {
+    if (IsMediaAction(action)) return false;
     if (inputSuppressed_) return false;
     if (!hidden_) return true;
     if (action == HotkeyAction::ToggleHidden) return true;

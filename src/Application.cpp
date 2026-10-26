@@ -5,7 +5,7 @@
 
 #include "CoreLogic.h"
 #include "Diagnostics.h"
-#include "MediaBridge.h"
+
 #include "../Resource.h"
 
 #include <WebView2EnvironmentOptions.h>
@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <sstream>
@@ -149,6 +150,7 @@ int Application::Run(HINSTANCE instance, int showCommand) {
     }
     Shutdown();
     if (SUCCEEDED(comResult)) CoUninitialize();
+    CleanupTemporaryProfile();
     return static_cast<int>(message.wParam);
 }
 
@@ -164,6 +166,10 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
     }
 
     config_.Load(state_);
+    state_.settings.backgroundMediaHotkeys = false;
+    for (size_t index = 0; index < kHotkeyCount; ++index) {
+        if (IsMediaAction(static_cast<HotkeyAction>(index))) state_.hotkeys[index].enabled = false;
+    }
     logs_.SetRetention(state_.settings.autoCleanLogs, state_.settings.logRetentionDays);
     logs_.Write("application.start",
         "tabs=" + std::to_string(state_.tabs.size()) +
@@ -200,7 +206,7 @@ bool Application::Initialize(HINSTANCE instance, int showCommand) {
     }
     if (largeIcon_) SendMessageW(mainWindow_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(largeIcon_));
     if (smallIcon_) SendMessageW(mainWindow_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(smallIcon_));
-    if (!ConfigureCaptureExclusion()) {
+    if (!ConfigureCaptureExclusion(mainWindow_)) {
         ShowError(L"Veil Browser", L"Capture protection is unavailable. The window will stay closed.");
         DestroyWindow(mainWindow_);
         mainWindow_ = nullptr;
@@ -244,6 +250,7 @@ void Application::Shutdown() {
     SaveConfiguration();
     logs_.Write("application.shutdown", "tabs=" + std::to_string(state_.tabs.size()));
     shuttingDown_ = true;
+    lifetime_->store(false);
     hotkeys_.Stop();
     inputGuard_.Stop();
     windowModes_.Shutdown();
@@ -297,20 +304,24 @@ void Application::CreateMainControls() {
         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_FIXEDWIDTH | TCS_OWNERDRAWFIXED | TCS_FOCUSNEVER,
         0, 0, 0, 0, mainWindow_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(Tabs)), instance_, nullptr);
     SetWindowSubclass(tabControl_, TabSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
-    backButton_ = CreateThemedButton(mainWindow_, L"Back", Back);
-    forwardButton_ = CreateThemedButton(mainWindow_, L"Next", Forward);
-    reloadButton_ = CreateThemedButton(mainWindow_, L"Reload", Reload);
-    goButton_ = CreateThemedButton(mainWindow_, L"Go", Go);
+    backButton_ = CreateThemedButton(mainWindow_, L"Back / Kembali", Back);
+    forwardButton_ = CreateThemedButton(mainWindow_, L"Next / Lanjut", Forward);
+    reloadButton_ = CreateThemedButton(mainWindow_, L"Reload / Muat", Reload);
+    goButton_ = CreateThemedButton(mainWindow_, L"Go / Buka", Go);
     addTabButton_ = CreateThemedButton(mainWindow_, L"＋", AddTab);
-    topmostButton_ = CreateThemedButton(mainWindow_, L"Top", Topmost);
-    clickThroughButton_ = CreateThemedButton(mainWindow_, L"Pass", ClickThrough);
+    topmostButton_ = CreateThemedButton(mainWindow_, L"Top / Atas", Topmost);
+    clickThroughButton_ = CreateThemedButton(mainWindow_, L"Pass / Tembus", ClickThrough);
     minimizeButton_ = CreateThemedButton(mainWindow_, L"—", Minimize);
     maximizeButton_ = CreateThemedButton(mainWindow_, L"□", Maximize);
     closeButton_ = CreateThemedButton(mainWindow_, L"×", Close);
     starButton_ = CreateThemedButton(mainWindow_, L"☆", Star);
-    bookmarkButton_ = CreateThemedButton(mainWindow_, L"Marks", Bookmarks);
-    presetButton_ = CreateThemedButton(mainWindow_, L"Scenes", Presets);
-    settingsButton_ = CreateThemedButton(mainWindow_, L"Settings", Settings);
+    bookmarkButton_ = CreateThemedButton(mainWindow_, L"Marks / Markah", Bookmarks);
+    presetButton_ = CreateThemedButton(mainWindow_, L"Scenes / Skenario", Presets);
+    settingsButton_ = CreateThemedButton(mainWindow_, L"Settings / Pengaturan", Settings);
+    SetWindowTextW(topmostButton_, state_.settings.alwaysOnTop
+        ? L"Top:on / Atas:aktif" : L"Top:off / Atas:nonaktif");
+    SetWindowTextW(clickThroughButton_, windowModes_.IsImmersive()
+        ? L"Pass:on / Tembus:aktif" : L"Pass:off / Tembus:nonaktif");
 
     const HWND controls[] = {addressEdit_, tabControl_, backButton_, forwardButton_, reloadButton_,
         goButton_, addTabButton_, topmostButton_, clickThroughButton_, minimizeButton_,
@@ -337,10 +348,10 @@ void Application::LayoutMainControls() {
         right -= captionButtonWidth;
         MoveWindow(minimizeButton_, right - captionButtonWidth, buttonY, captionButtonWidth, buttonHeight, TRUE);
         right -= captionButtonWidth;
-        MoveWindow(clickThroughButton_, right - Scale(52), buttonY, Scale(52), buttonHeight, TRUE);
-        right -= Scale(52);
-        MoveWindow(topmostButton_, right - Scale(44), buttonY, Scale(44), buttonHeight, TRUE);
-        right -= Scale(44);
+        MoveWindow(clickThroughButton_, right - Scale(132), buttonY, Scale(132), buttonHeight, TRUE);
+        right -= Scale(132);
+        MoveWindow(topmostButton_, right - Scale(116), buttonY, Scale(116), buttonHeight, TRUE);
+        right -= Scale(116);
         MoveWindow(addTabButton_, right - captionButtonWidth, buttonY,
                    captionButtonWidth, buttonHeight, TRUE);
         right -= captionButtonWidth;
@@ -362,8 +373,8 @@ void Application::LayoutMainControls() {
         const int gap = Scale(5);
         const int margin = Scale(7);
         const int smallWidth = Scale(34);
-        const int textWidth = Scale(52);
-        const bool compact = width < Scale(480);
+        const int textWidth = Scale(84);
+        const bool compact = width < Scale(900);
         const HWND optionalButtons[] = {
             starButton_, bookmarkButton_, presetButton_, settingsButton_};
         for (const HWND button : optionalButtons) {
@@ -390,7 +401,7 @@ void Application::LayoutMainControls() {
             };
             placeLeft(backButton_, textWidth);
             placeLeft(forwardButton_, textWidth);
-            placeLeft(reloadButton_, Scale(60));
+            placeLeft(reloadButton_, Scale(102));
             int xRight = width - margin;
             auto placeRight = [&](HWND button, int buttonWidth) {
                 xRight -= buttonWidth;
@@ -398,9 +409,9 @@ void Application::LayoutMainControls() {
                            navigationButtonHeight, TRUE);
                 xRight -= gap;
             };
-            placeRight(settingsButton_, Scale(68));
-            placeRight(presetButton_, Scale(58));
-            placeRight(bookmarkButton_, Scale(58));
+            placeRight(settingsButton_, Scale(130));
+            placeRight(presetButton_, Scale(112));
+            placeRight(bookmarkButton_, Scale(102));
             placeRight(starButton_, smallWidth);
             placeRight(goButton_, textWidth);
             MoveWindow(addressEdit_, xLeft, navigationY + Scale(7),
@@ -545,12 +556,14 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
         else if (id == AddTab) CreateNewTab(state_.settings.homeUrl, L"New tab", true);
         else if (id == Topmost) {
             windowModes_.ToggleAlwaysOnTop();
-            SetWindowTextW(topmostButton_, windowModes_.IsAlwaysOnTop() ? L"Top:on" : L"Top:off");
+            SetWindowTextW(topmostButton_, windowModes_.IsAlwaysOnTop()
+                ? L"Top:on / Atas:aktif" : L"Top:off / Atas:nonaktif");
             SaveConfiguration();
         }
         else if (id == ClickThrough) {
-            windowModes_.ToggleImmersion();
-            SetWindowTextW(clickThroughButton_, windowModes_.IsImmersive() ? L"Pass:on" : L"Pass:off");
+            ToggleImmersion();
+            SetWindowTextW(clickThroughButton_, windowModes_.IsImmersive()
+                ? L"Pass:on / Tembus:aktif" : L"Pass:off / Tembus:nonaktif");
         }
         else if (id == Minimize) MinimizeWindow();
         else if (id == Maximize) { windowModes_.ToggleMaximized(); SetWindowTextW(maximizeButton_, windowModes_.IsSeamlessMaximized() ? L"❐" : L"□"); }
@@ -722,9 +735,17 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
         }
         return 0;
     case WM_KEYDOWN:
-        if (wParam == VK_ESCAPE && windowModes_.IsWebFullscreen()) {
-            ExecuteScript(L"if(document.fullscreenElement) document.exitFullscreen();");
-            windowModes_.LeaveWebFullscreen();
+        if (wParam == VK_ESCAPE) {
+            if (windowModes_.IsWebFullscreen()) {
+                ExecuteScript(L"if(document.fullscreenElement) document.exitFullscreen();");
+                windowModes_.LeaveWebFullscreen();
+            }
+            if (windowModes_.IsImmersive()) {
+                windowModes_.SetImmersion(false);
+                hotkeys_.SetImmersiveWebFullscreen(false);
+                SetWindowTextW(clickThroughButton_, L"Pass:off / Tembus:nonaktif");
+                state_.immersionActive = false;
+            }
             return 0;
         }
         break;
@@ -748,8 +769,7 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
         return 0;
 #ifdef XIAOCHUANG_SMOKE_TEST
     case kSetWebTypingSmokeMessage:
-        webTyping_ = wParam != 0;
-        inputGuard_.SetWebTyping(webTyping_);
+        inputGuard_.SetWebTyping(wParam != 0);
         return 0;
     case kSetWebFullscreenSmokeMessage:
         if (wParam != 0) {
@@ -971,13 +991,13 @@ LRESULT CALLBACK Application::TabSubclassProc(HWND window, UINT message, WPARAM 
     return DefSubclassProc(window, message, wParam, lParam);
 }
 
-bool Application::ConfigureCaptureExclusion() {
-    if (!mainWindow_ || !SetWindowDisplayAffinity(mainWindow_, kWdaExcludeFromCapture)) {
+bool Application::ConfigureCaptureExclusion(HWND window) {
+    if (!window || !SetWindowDisplayAffinity(window, kWdaExcludeFromCapture)) {
         logs_.Write("capture.exclusion.failed", "error=" + std::to_string(GetLastError()));
         return false;
     }
     DWORD affinity = 0;
-    if (!GetWindowDisplayAffinity(mainWindow_, &affinity) || affinity != kWdaExcludeFromCapture) {
+    if (!GetWindowDisplayAffinity(window, &affinity) || affinity != kWdaExcludeFromCapture) {
         logs_.Write("capture.exclusion.verify_failed",
                     "affinity=" + std::to_string(affinity) +
                     " error=" + std::to_string(GetLastError()));
@@ -990,11 +1010,36 @@ bool Application::ConfigureCaptureExclusion() {
 bool Application::PrepareTemporaryProfile() {
     wchar_t tempDirectory[MAX_PATH]{};
     if (GetTempPathW(static_cast<DWORD>(std::size(tempDirectory)), tempDirectory) == 0) return false;
-    wchar_t uniquePath[MAX_PATH]{};
-    if (GetTempFileNameW(tempDirectory, kTemporaryProfilePrefix, 0, uniquePath) == 0) return false;
-    DeleteFileW(uniquePath);
+    const std::filesystem::path tempRoot(tempDirectory);
     std::error_code error;
-    temporaryProfilePath_ = uniquePath;
+    for (std::filesystem::directory_iterator iter(tempRoot, error), end;
+         !error && iter != end; iter.increment(error)) {
+        const auto& entry = *iter;
+        const std::wstring name = entry.path().filename().wstring();
+        if (!name.starts_with(kTemporaryProfilePrefix)) continue;
+        const size_t pidStart = std::size(kTemporaryProfilePrefix) - 1;
+        const size_t separator = name.find(L'-', pidStart);
+        if (separator == std::wstring::npos) continue;
+        const std::wstring pidText = name.substr(pidStart, separator - pidStart);
+        wchar_t* end = nullptr;
+        const DWORD processId = wcstoul(pidText.c_str(), &end, 10);
+        if (processId == 0 || !end || *end != L'\0') continue;
+        bool processActive = false;
+        if (HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, processId)) {
+            processActive = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+            CloseHandle(process);
+        } else {
+            processActive = GetLastError() != ERROR_INVALID_PARAMETER;
+        }
+        if (!processActive) {
+            std::error_code cleanupError;
+            std::filesystem::remove_all(entry.path(), cleanupError);
+        }
+    }
+    temporaryProfilePath_ = tempRoot /
+        (std::wstring(kTemporaryProfilePrefix) + std::to_wstring(GetCurrentProcessId()) + L"-" +
+         std::to_wstring(GetTickCount64()));
+    error.clear();
     if (!std::filesystem::create_directory(temporaryProfilePath_, error) || error) {
         temporaryProfilePath_.clear();
         return false;
@@ -1006,9 +1051,17 @@ bool Application::PrepareTemporaryProfile() {
 void Application::CleanupTemporaryProfile() {
     if (temporaryProfilePath_.empty()) return;
     std::error_code error;
-    std::filesystem::remove_all(temporaryProfilePath_, error);
-    logs_.Write(error ? "webview.profile.cleanup_deferred" : "webview.profile.cleaned");
-    temporaryProfilePath_.clear();
+    bool removed = false;
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        error.clear();
+        std::filesystem::remove_all(temporaryProfilePath_, error);
+        std::error_code existsError;
+        removed = !std::filesystem::exists(temporaryProfilePath_, existsError) && !existsError;
+        if (removed) break;
+        Sleep(50);
+    }
+    logs_.Write(removed ? "webview.profile.cleaned" : "webview.profile.cleanup_deferred");
+    if (removed) temporaryProfilePath_.clear();
 }
 
 void Application::InitializeWebView() {
@@ -1035,8 +1088,8 @@ void Application::InitializeWebView() {
     const HRESULT result = CreateCoreWebView2EnvironmentWithOptions(
         nullptr, temporaryProfilePath_.c_str(), options.Get(),
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [this, generation](HRESULT environmentResult, ICoreWebView2Environment* environment) -> HRESULT {
-                if (shuttingDown_ || generation != webViewGeneration_) return S_OK;
+            [this, lifetime = lifetime_, generation](HRESULT environmentResult, ICoreWebView2Environment* environment) -> HRESULT {
+                if (!lifetime->load() || shuttingDown_ || generation != webViewGeneration_) return S_OK;
                 if (FAILED(environmentResult) || !environment) {
                     logs_.Write("webview.environment.failed",
                         "hr=" + std::to_string(static_cast<unsigned long>(environmentResult)));
@@ -1054,8 +1107,8 @@ void Application::InitializeWebView() {
                 const HRESULT creationResult = environment->CreateCoreWebView2Controller(
                     mainWindow_,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [this, generation](HRESULT controllerResult, ICoreWebView2Controller* controller) -> HRESULT {
-                            if (shuttingDown_ || generation != webViewGeneration_) {
+                        [this, lifetime, generation](HRESULT controllerResult, ICoreWebView2Controller* controller) -> HRESULT {
+                            if (!lifetime->load() || shuttingDown_ || generation != webViewGeneration_) {
                                 if (controller) controller->Close();
                                 return S_OK;
                             }
@@ -1091,9 +1144,7 @@ void Application::InitializeWebView() {
                             }
                             if (!ConfigureWebViewEvents()) {
                                 ShowError(L"Veil Browser", L"Web security event handlers could not be installed.");
-                                controller->Close();
-                                webView_.reset();
-                                webViewController_.reset();
+                                CloseWebView();
                                 ShowWindow(mainWindow_, SW_HIDE);
                                 PostMessageW(mainWindow_, WM_CLOSE, 0, 0);
                                 return S_OK;
@@ -1125,36 +1176,51 @@ void Application::InitializeWebView() {
 
 bool Application::ConfigureWebViewEvents() {
     if (!webView_) return false;
+    const auto lifetime = lifetime_;
+    const UINT64 generation = webViewGeneration_;
     const HRESULT navigationRegistration = webView_->add_NavigationStarting(
         Callback<ICoreWebView2NavigationStartingEventHandler>(
-            [this](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+            [this, lifetime, generation](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                if (!lifetime->load() || generation != webViewGeneration_) return S_OK;
 #ifdef XIAOCHUANG_SMOKE_TEST
                 smokeNavigationComplete_ = false;
 #endif
                 hotkeys_.CancelActiveGesture();
                 inputGuard_.SetWebTyping(false);
-                UINT64 navigationId = 0;
-                if (args) {
-                    wil::unique_cotaskmem_string uri;
-                    if (FAILED(args->get_Uri(&uri)) || !uri ||
-                        !IsSupportedWebNavigationUrl(uri.get())) {
-                        args->put_Cancel(TRUE);
-                        logs_.Write("navigation.blocked_non_https");
-                        EndContentWait();
-                        return S_OK;
-                    }
-                    args->get_NavigationId(&navigationId);
-                    if (waitingForTabContent_) waitingNavigationId_ = navigationId;
+                if (!args) {
+                    FailClosedWebView("navigation.args_null");
+                    return E_POINTER;
                 }
+                UINT64 navigationId = 0;
+                wil::unique_cotaskmem_string uri;
+                const HRESULT uriResult = args->get_Uri(&uri);
+                const HRESULT idResult = args->get_NavigationId(&navigationId);
+                if (FAILED(uriResult) || !uri || FAILED(idResult)) {
+                    const HRESULT cancelResult = args->put_Cancel(TRUE);
+                    if (FAILED(cancelResult)) FailClosedWebView("navigation.cancel_failed");
+                    else FailClosedWebView("navigation.metadata_failed");
+                    return FAILED(cancelResult) ? cancelResult : E_FAIL;
+                }
+                if (!IsSupportedWebNavigationUrl(uri.get())) {
+                    const HRESULT cancelResult = args->put_Cancel(TRUE);
+                    if (FAILED(cancelResult)) FailClosedWebView("navigation.cancel_failed");
+                    logs_.Write("navigation.blocked_non_https");
+                    EndContentWait();
+                    return cancelResult;
+                }
+                activeNavigationId_ = navigationId;
+                activeNavigationTabIndex_ = state_.currentTabIndex;
+                if (waitingForTabContent_) waitingNavigationId_ = navigationId;
                 logs_.Write("navigation.start",
                     "generation=" + std::to_string(webViewGeneration_) +
                     " id=" + std::to_string(navigationId) +
                     " tab=" + std::to_string(state_.currentTabIndex));
                 return S_OK;
             }).Get(), &navigationStartingToken_);
-    webView_->add_ContentLoading(
+    const HRESULT contentRegistration = webView_->add_ContentLoading(
         Callback<ICoreWebView2ContentLoadingEventHandler>(
-            [this](ICoreWebView2*, ICoreWebView2ContentLoadingEventArgs* args) -> HRESULT {
+            [this, lifetime, generation](ICoreWebView2*, ICoreWebView2ContentLoadingEventArgs* args) -> HRESULT {
+                if (!lifetime->load() || generation != webViewGeneration_) return S_OK;
                 UINT64 navigationId = 0;
                 if (args) args->get_NavigationId(&navigationId);
                 logs_.Write("navigation.content_loading",
@@ -1165,27 +1231,26 @@ bool Application::ConfigureWebViewEvents() {
                 EndContentWait();
                 return S_OK;
             }).Get(), &contentLoadingToken_);
-    webView_->add_NavigationCompleted(
+    const HRESULT completedRegistration = webView_->add_NavigationCompleted(
         Callback<ICoreWebView2NavigationCompletedEventHandler>(
-            [this](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+            [this, lifetime, generation](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                if (!lifetime->load() || generation != webViewGeneration_ || !args) return S_OK;
 #ifdef XIAOCHUANG_SMOKE_TEST
                 smokeNavigationComplete_ = true;
 #endif
                 UINT64 navigationId = 0;
                 BOOL succeeded = FALSE;
                 COREWEBVIEW2_WEB_ERROR_STATUS errorStatus = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
-                if (args) {
-                    args->get_NavigationId(&navigationId);
-                    args->get_IsSuccess(&succeeded);
-                    if (!succeeded) args->get_WebErrorStatus(&errorStatus);
-                }
+                if (FAILED(args->get_NavigationId(&navigationId))) return S_OK;
+                args->get_IsSuccess(&succeeded);
+                if (!succeeded) args->get_WebErrorStatus(&errorStatus);
                 logs_.Write("navigation.completed",
                     "generation=" + std::to_string(webViewGeneration_) +
                     " id=" + std::to_string(navigationId) +
                     " success=" + std::to_string(succeeded ? 1 : 0) +
                     " web_error=" + std::to_string(static_cast<int>(errorStatus)));
-                if (waitingForTabContent_ && waitingNavigationId_ != 0 &&
-                    navigationId != waitingNavigationId_) return S_OK;
+                if (navigationId != activeNavigationId_ ||
+                    activeNavigationTabIndex_ != state_.currentTabIndex) return S_OK;
                 if (waitingForTabContent_) {
                     EndContentWait();
                 }
@@ -1199,72 +1264,66 @@ bool Application::ConfigureWebViewEvents() {
                 }
                 return S_OK;
             }).Get(), &navigationCompletedToken_);
-    webView_->add_SourceChanged(
-        Callback<ICoreWebView2SourceChangedEventHandler>(
-            [this](ICoreWebView2*, ICoreWebView2SourceChangedEventArgs*) -> HRESULT {
-                if (waitingForTabContent_) return S_OK;
-                wil::unique_cotaskmem_string source;
-                if (webView_ && SUCCEEDED(webView_->get_Source(&source)) && source) {
-                    UpdateCurrentTabUrl(source.get());
-                }
-                return S_OK;
-            }).Get(), &sourceChangedToken_);
-    webView_->add_DocumentTitleChanged(
-        Callback<ICoreWebView2DocumentTitleChangedEventHandler>(
-            [this](ICoreWebView2*, IUnknown*) -> HRESULT {
-                if (waitingForTabContent_) return S_OK;
-                wil::unique_cotaskmem_string title;
-                if (webView_ && SUCCEEDED(webView_->get_DocumentTitle(&title)) && title) {
-                    UpdateCurrentTabTitle(title.get());
-                }
-                return S_OK;
-            }).Get(), &titleChangedToken_);
-
     const HRESULT fullscreenRegistration = webView_->add_ContainsFullScreenElementChanged(
         Callback<ICoreWebView2ContainsFullScreenElementChangedEventHandler>(
-            [this](ICoreWebView2*, IUnknown*) -> HRESULT {
+            [this, lifetime, generation](ICoreWebView2*, IUnknown*) -> HRESULT {
+                if (!lifetime->load() || generation != webViewGeneration_) return S_OK;
                 HandleWebFullscreenChanged();
                 return S_OK;
             }).Get(), &fullscreenToken_);
-    if (FAILED(fullscreenRegistration)) {
-        ShowError(L"Fullscreen event failed / Event layar penuh gagal",
-                  L"Web fullscreen remains available; Esc restore or auto sizing may fail / Layar penuh web tetap tersedia; pemulihan Esc atau ukuran otomatis mungkin gagal.",
-                  fullscreenRegistration);
-    }
     const HRESULT popupRegistration = webView_->add_NewWindowRequested(
         Callback<ICoreWebView2NewWindowRequestedEventHandler>(
-            [](ICoreWebView2*, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
-                if (args) args->put_Handled(TRUE);
-                return S_OK;
+            [this, lifetime, generation](ICoreWebView2*, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
+                if (!lifetime->load() || generation != webViewGeneration_) return S_OK;
+                if (!args) { FailClosedWebView("popup.args_null"); return E_POINTER; }
+                const HRESULT result = args->put_Handled(TRUE);
+                if (FAILED(result)) FailClosedWebView("popup.deny_failed");
+                return result;
             }).Get(), &newWindowToken_);
     const HRESULT permissionRegistration = webView_->add_PermissionRequested(
         Callback<ICoreWebView2PermissionRequestedEventHandler>(
-            [](ICoreWebView2*, ICoreWebView2PermissionRequestedEventArgs* args) -> HRESULT {
-                if (args) args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
-                return S_OK;
+            [this, lifetime, generation](ICoreWebView2*, ICoreWebView2PermissionRequestedEventArgs* args) -> HRESULT {
+                if (!lifetime->load() || generation != webViewGeneration_) return S_OK;
+                if (!args) { FailClosedWebView("permission.args_null"); return E_POINTER; }
+                const HRESULT result = args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+                if (FAILED(result)) FailClosedWebView("permission.deny_failed");
+                return result;
             }).Get(), &permissionToken_);
     HRESULT downloadRegistration = E_NOINTERFACE;
     wil::com_ptr<ICoreWebView2_4> webView4;
     if (webView_.try_query_to(&webView4) && webView4) {
         downloadRegistration = webView4->add_DownloadStarting(
             Callback<ICoreWebView2DownloadStartingEventHandler>(
-                [this](ICoreWebView2*, ICoreWebView2DownloadStartingEventArgs* args) -> HRESULT {
-                    if (args) args->put_Cancel(TRUE);
+                [this, lifetime, generation](ICoreWebView2*, ICoreWebView2DownloadStartingEventArgs* args) -> HRESULT {
+                    if (!lifetime->load() || generation != webViewGeneration_) return S_OK;
+                    if (!args) { FailClosedWebView("download.args_null"); return E_POINTER; }
+                    const HRESULT result = args->put_Cancel(TRUE);
+                    if (FAILED(result)) FailClosedWebView("download.deny_failed");
                     EndContentWait();
-                    return S_OK;
+                    return result;
                 }).Get(), &downloadToken_);
     }
     const HRESULT processRegistration = webView_->add_ProcessFailed(
         Callback<ICoreWebView2ProcessFailedEventHandler>(
-            [this](ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs* args) -> HRESULT {
+            [this, lifetime, generation](ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs* args) -> HRESULT {
+                if (!lifetime->load() || generation != webViewGeneration_) return S_OK;
                 COREWEBVIEW2_PROCESS_FAILED_KIND kind = COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED;
                 if (args) args->get_ProcessFailedKind(&kind);
                 HandleProcessFailure(kind);
                 return S_OK;
             }).Get(), &processFailedToken_);
-    return SUCCEEDED(navigationRegistration) && SUCCEEDED(popupRegistration) &&
+    return SUCCEEDED(navigationRegistration) && SUCCEEDED(contentRegistration) &&
+        SUCCEEDED(completedRegistration) && SUCCEEDED(fullscreenRegistration) &&
+        SUCCEEDED(popupRegistration) &&
         SUCCEEDED(permissionRegistration) && SUCCEEDED(downloadRegistration) &&
         SUCCEEDED(processRegistration);
+}
+
+void Application::FailClosedWebView(const char* reason) {
+    logs_.Write("webview.security_fail_closed", reason ? reason : "unknown");
+    if (!mainWindow_ || shuttingDown_) return;
+    ShowWindow(mainWindow_, SW_HIDE);
+    PostMessageW(mainWindow_, WM_CLOSE, 0, 0);
 }
 
 void Application::FinishInitialNavigation() {
@@ -1293,10 +1352,7 @@ void Application::ExecuteScript(const std::wstring& script) {
 }
 
 void Application::ExecuteMediaAction(HotkeyAction action, HotkeyGesture gesture) {
-    // A hold-stop is cleanup rather than a new user action, so it must still
-    // restore playback state if input protection becomes active mid-gesture.
-    if (inputGuard_.IsTyping() && state_.settings.disableHotkeysOnTyping &&
-        gesture != HotkeyGesture::HoldStop) return;
+    (void)gesture;
 #ifdef XIAOCHUANG_SMOKE_TEST
     ++smokeHotkeyCounts_[HotkeyIndex(action)];
 #endif
@@ -1308,19 +1364,6 @@ void Application::ExecuteMediaAction(HotkeyAction action, HotkeyGesture gesture)
         if (!windowModes_.IsHidden()) ToggleImmersion();
         return;
     }
-    if (!webView_) return;
-
-    MediaCommand command = MediaCommand::TogglePlay;
-    if (action == HotkeyAction::SeekBackward) {
-        command = gesture == HotkeyGesture::HoldStart ? MediaCommand::HoldBackward
-            : gesture == HotkeyGesture::HoldStop ? MediaCommand::StopHold : MediaCommand::SeekBackward;
-    } else if (action == HotkeyAction::SeekForward) {
-        command = gesture == HotkeyGesture::HoldStart ? MediaCommand::HoldForward
-            : gesture == HotkeyGesture::HoldStop ? MediaCommand::StopHold : MediaCommand::SeekForward;
-    } else if (action == HotkeyAction::Previous) command = MediaCommand::Previous;
-    else if (action == HotkeyAction::Next) command = MediaCommand::Next;
-    else if (action != HotkeyAction::PlayPause) return;
-    ExecuteScript(MediaBridge::CommandScript(command, state_.settings.holdPlaybackRate));
 }
 
 void Application::RequestMediaDiagnostics() {
@@ -1331,37 +1374,11 @@ void Application::RequestMediaDiagnostics() {
     base += inputGuardStarted_ ? L"started, " : L"startup incomplete, ";
     base += inputGuard_.StatusText() + L"\r\n";
     base += L"UI heartbeat maximum delay: " + std::to_wstring(maximumHeartbeatDelay_) + L" ms\r\n";
-    if (!webView_) {
-        const bool copied = CopyTextToClipboard(mainWindow_, base);
-        MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_,
-                    (base + (copied ? L"\n\nDiagnostics copied / Diagnostik disalin." :
-                                      L"\n\nCannot write clipboard / Tidak dapat menulis clipboard.")).c_str(),
-                    L"Veil Browser diagnostics / Diagnostik", MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-    webView_->ExecuteScript(MediaBridge::DiagnosticScript().c_str(),
-        Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
-            [this, base = std::move(base)](HRESULT result, PCWSTR value) -> HRESULT {
-                std::wstring report = base;
-                report += L"\nActive media / Media aktif: ";
-                report += SUCCEEDED(result) && value ? DecodeExecuteScriptString(value) : L"Unavailable / Tidak tersedia";
-                const bool copied = CopyTextToClipboard(mainWindow_, report);
-                MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_,
-                            (report + (copied ? L"\n\nDiagnostics copied / Diagnostik disalin." :
-                                                L"\n\nCannot write clipboard / Tidak dapat menulis clipboard.")).c_str(),
-                            L"Veil Browser diagnostics / Diagnostik", MB_OK | MB_ICONINFORMATION);
-                return S_OK;
-            }).Get());
-}
-
-void Application::HandleWebMessage(const std::wstring& message) {
-    if (message == L"MWB_TYPING:1") {
-        webTyping_ = true;
-        inputGuard_.SetWebTyping(true);
-    } else if (message == L"MWB_TYPING:0") {
-        webTyping_ = false;
-        inputGuard_.SetWebTyping(false);
-    }
+    const bool copied = CopyTextToClipboard(mainWindow_, base);
+    MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_,
+                (base + (copied ? L"\n\nDiagnostics copied / Diagnostik disalin." :
+                                  L"\n\nCannot write clipboard / Tidak dapat menulis clipboard.")).c_str(),
+                L"Veil Browser diagnostics / Diagnostik", MB_OK | MB_ICONINFORMATION);
 }
 
 void Application::HandleWebFullscreenChanged() {
@@ -1386,7 +1403,8 @@ const height=(video&&(video.videoHeight||video.clientHeight))||root.clientHeight
 return width>0&&height>0?width/height:0})())JS";
         webView_->ExecuteScript(script,
             Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
-                [this](HRESULT result, PCWSTR value) -> HRESULT {
+                [this, lifetime = lifetime_, generation = webViewGeneration_](HRESULT result, PCWSTR value) -> HRESULT {
+                    if (!lifetime->load() || generation != webViewGeneration_) return S_OK;
                     if (FAILED(result) || !value) return S_OK;
                     wchar_t* end = nullptr;
                     const double aspectRatio = wcstod(value, &end);
@@ -1443,8 +1461,8 @@ void Application::ProbeWebViewResponsiveness() {
     }
     const HRESULT hr = webView_->ExecuteScript(L"0",
         Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
-            [this, generation, serial](HRESULT result, PCWSTR) -> HRESULT {
-                if (!shuttingDown_ && generation == webViewGeneration_ &&
+            [this, lifetime = lifetime_, generation, serial](HRESULT result, PCWSTR) -> HRESULT {
+                if (lifetime->load() && !shuttingDown_ && generation == webViewGeneration_ &&
                     serial == contentProbeSerial_ && contentProbePending_ &&
                     SUCCEEDED(result)) {
                     logs_.Write("webview.probe.ok",
@@ -1471,7 +1489,7 @@ void Application::RecreateWebView() {
     webViewRecoveryPending_ = false;
     hotkeys_.CancelActiveGesture();
     inputGuard_.SetWebTyping(false);
-    webTyping_ = false;
+
     windowModes_.LeaveWebFullscreen();
     hotkeys_.SetImmersiveWebFullscreen(false);
     CloseWebView();
@@ -1494,8 +1512,23 @@ void Application::CloseWebView() {
     ++contentProbeSerial_;
     waitingForTabContent_ = false;
     waitingNavigationId_ = 0;
+    activeNavigationId_ = 0;
+    activeNavigationTabIndex_ = -1;
     contentWaitStartedAt_ = 0;
     webZoom_.Detach();
+    if (webView_) {
+        webView_->remove_NavigationStarting(navigationStartingToken_);
+        webView_->remove_ContentLoading(contentLoadingToken_);
+        webView_->remove_NavigationCompleted(navigationCompletedToken_);
+        webView_->remove_ContainsFullScreenElementChanged(fullscreenToken_);
+        webView_->remove_NewWindowRequested(newWindowToken_);
+        webView_->remove_PermissionRequested(permissionToken_);
+        webView_->remove_ProcessFailed(processFailedToken_);
+        wil::com_ptr<ICoreWebView2_4> webView4;
+        if (webView_.try_query_to(&webView4) && webView4) {
+            webView4->remove_DownloadStarting(downloadToken_);
+        }
+    }
     if (webViewController_) webViewController_->Close();
     webView_.reset();
     webViewController_.reset();
@@ -1836,7 +1869,7 @@ void Application::EndContentWait() {
     waitingNavigationId_ = 0;
     contentWaitStartedAt_ = 0;
     if (webViewController_) {
-        const BOOL render = !windowModes_.IsHidden() || state_.settings.backgroundMediaHotkeys;
+        const BOOL render = !windowModes_.IsHidden();
         webViewController_->put_IsVisible(render);
     }
     if (wasWaiting) {
@@ -1856,7 +1889,7 @@ void Application::SetHidden(bool hidden) {
         ExecuteScript(L"(()=>{const v=document.querySelector('video');if(v&&!v.paused)v.pause();})()");
     }
     if (webViewController_) {
-        const BOOL render = !hidden || state_.settings.backgroundMediaHotkeys;
+        const BOOL render = !hidden;
         webViewController_->put_IsVisible(render);
     }
     windowModes_.SetHidden(hidden);
@@ -1878,8 +1911,7 @@ void Application::ToggleImmersion() {
     const bool entering = !windowModes_.IsImmersive();
     windowModes_.ToggleImmersion();
     state_.immersionActive = windowModes_.IsImmersive();
-    hotkeys_.SetImmersiveWebFullscreen(
-        windowModes_.IsImmersive() && windowModes_.IsWebFullscreen());
+    hotkeys_.SetImmersiveWebFullscreen(windowModes_.IsImmersive());
     if (entering && windowModes_.IsImmersive()) {
         TransferFocusAwayFromApplication();
         // Entering immersion removes activation from the host. Re-evaluate the
@@ -1930,7 +1962,7 @@ void Application::MinimizeWindow() {
 void Application::RefreshHotkeys() {
     const bool suppressed = captureAction_.has_value() ||
         (state_.settings.disableHotkeysOnTyping && inputGuard_.IsTyping());
-    hotkeys_.Refresh(windowModes_.IsHidden(), state_.settings.backgroundMediaHotkeys, suppressed);
+    hotkeys_.Refresh(windowModes_.IsHidden(), false, suppressed);
     if (hotkeys_.RegistrationErrors().empty()) {
         KillTimer(mainWindow_, kHotkeyRegistrationRetryTimerId);
         currentHotkeyErrorSignature_.clear();
@@ -1959,11 +1991,8 @@ void Application::RefreshHotkeys() {
 
 void Application::ShowHotkeyErrors() {
     if (hotkeys_.RegistrationErrors().empty()) return;
-    std::wstring message = L"These global hotkeys are used by another app / Hotkey berikut dipakai aplikasi lain:\n\n";
-    for (const std::wstring& error : hotkeys_.RegistrationErrors()) message += L"• " + error + L"\n";
-    message += L"\nChange them in Settings / Ubah di Pengaturan.";
-    MessageBoxW(settingsWindow_ ? settingsWindow_ : mainWindow_, message.c_str(),
-                L"Hotkey conflict / Konflik hotkey", MB_OK | MB_ICONWARNING);
+    logs_.Write("hotkey.registration_conflict",
+        "count=" + std::to_string(hotkeys_.RegistrationErrors().size()));
 }
 
 void Application::AddTrayIcon() {
@@ -2017,7 +2046,7 @@ void Application::RestoreFromUserAction() {
     if (windowModes_.IsHidden()) SetHidden(false);
     if (IsIconic(mainWindow_)) ShowWindow(mainWindow_, SW_RESTORE);
     else ShowWindow(mainWindow_, SW_SHOW);
-    SetWindowPos(mainWindow_, HWND_TOPMOST, 0, 0, 0, 0,
+    SetWindowPos(mainWindow_, TopmostInsertAfter(windowModes_.IsAlwaysOnTop()), 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
     BringWindowToTop(mainWindow_);
     SetForegroundWindow(mainWindow_);
@@ -2056,6 +2085,11 @@ void Application::ShowSettingsWindow() {
             L"Settings / Pengaturan · Veil Browser", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VSCROLL,
             CW_USEDEFAULT, CW_USEDEFAULT, Scale(720), Scale(700), mainWindow_, nullptr, instance_, this);
         if (!settingsWindow_) return;
+        if (!ConfigureCaptureExclusion(settingsWindow_)) {
+            DestroyWindow(settingsWindow_);
+            settingsWindow_ = nullptr;
+            return;
+        }
         CenterOwnedWindow(settingsWindow_, Scale(720), Scale(700));
     }
     RefreshSettingsControls();
@@ -2192,12 +2226,10 @@ void Application::CreateSettingsControls(HWND window) {
     y += row;
     settingsControls_.typing = checkbox(L"Pause hotkeys while typing / Jeda hotkey saat mengetik", SettingsTyping, y);
     y += Scale(30);
-    settingsControls_.backgroundMedia = checkbox(L"Media hotkeys while hidden / Hotkey media saat tersembunyi", SettingsBackgroundMedia, y);
-    y += Scale(44);
-
     heading(L"Hotkeys / Tombol pintas (Ctrl / Alt / Shift)");
     const auto defaults = DefaultHotkeys();
     for (size_t index = 0; index < kHotkeyCount; ++index) {
+        if (IsMediaAction(static_cast<HotkeyAction>(index))) continue;
         label(defaults[index].displayName.c_str(), y);
         settingsControls_.hotkeys[index] = CreateThemedButton(
             window, L"", SettingsHotkeyBase + static_cast<int>(index));
@@ -2213,13 +2245,6 @@ void Application::CreateSettingsControls(HWND window) {
     y += Scale(12);
 
     heading(L"Performance & appearance / Performa & tampilan");
-    label(L"Hold seek speed / Kecepatan tekan lama", y);
-    settingsControls_.holdRate = combo(SettingsHoldRate, y, Scale(150));
-    for (int rate = 2; rate <= 5; ++rate) {
-        const std::wstring text = std::to_wstring(rate) + L"×";
-        SendMessageW(settingsControls_.holdRate, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
-    }
-    y += row;
     label(L"Rendering / Render web", y);
     settingsControls_.renderMode = combo(SettingsRenderMode, y, Scale(260));
     SendMessageW(settingsControls_.renderMode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Automatic GPU / GPU otomatis"));
@@ -2286,13 +2311,13 @@ void Application::ReadSettingsControls() {
     state_.settings.maximizedTopDragEnabled = IsChecked(settingsControls_.maximizedTopDrag);
     state_.settings.disableHotkeysOnTyping = IsChecked(settingsControls_.typing);
     state_.settings.useSystemTray = IsChecked(settingsControls_.tray);
-    state_.settings.backgroundMediaHotkeys = IsChecked(settingsControls_.backgroundMedia);
+    state_.settings.backgroundMediaHotkeys = false;
     state_.settings.homeUrl = NormalizeInputUrl(WindowText(settingsControls_.home));
     state_.settings.immersionStyle = static_cast<ImmersionStyle>(ComboValue(settingsControls_.style));
     const int opacity = std::clamp(ParseInteger(settingsControls_.opacityEdit,
         static_cast<int>(SendMessageW(settingsControls_.opacitySlider, TBM_GETPOS, 0, 0))), 0, 100);
     state_.settings.autoHideOpacityPercent = opacity;
-    state_.settings.holdPlaybackRate = ComboValue(settingsControls_.holdRate, old.holdPlaybackRate - 2) + 2;
+    state_.settings.holdPlaybackRate = old.holdPlaybackRate;
     state_.settings.renderMode = static_cast<RenderMode>(ComboValue(settingsControls_.renderMode));
     state_.settings.themeMode = static_cast<ThemeMode>(ComboValue(settingsControls_.theme));
     state_.settings.autoCleanLogs = IsChecked(settingsControls_.logAutoClean);
@@ -2321,8 +2346,7 @@ void Application::ReadSettingsControls() {
         old.holeRefreshMs != state_.settings.holeRefreshMs) {
         windowModes_.RefreshVisualState();
     }
-    if (old.disableHotkeysOnTyping != state_.settings.disableHotkeysOnTyping ||
-        old.backgroundMediaHotkeys != state_.settings.backgroundMediaHotkeys) {
+    if (old.disableHotkeysOnTyping != state_.settings.disableHotkeysOnTyping) {
         inputGuard_.SetEnabled(state_.settings.disableHotkeysOnTyping);
         RefreshHotkeys();
     }
@@ -2369,9 +2393,9 @@ void Application::RefreshSettingsControls() {
     SetCheck(settingsControls_.maximizedTopDrag, state_.settings.maximizedTopDragEnabled);
     SetCheck(settingsControls_.typing, state_.settings.disableHotkeysOnTyping);
     SetCheck(settingsControls_.tray, state_.settings.useSystemTray);
-    SetCheck(settingsControls_.backgroundMedia, state_.settings.backgroundMediaHotkeys);
+
     SelectComboValue(settingsControls_.style, static_cast<int>(state_.settings.immersionStyle));
-    SelectComboValue(settingsControls_.holdRate, state_.settings.holdPlaybackRate - 2);
+
     SelectComboValue(settingsControls_.renderMode, static_cast<int>(state_.settings.renderMode));
     SelectComboValue(settingsControls_.theme, static_cast<int>(state_.settings.themeMode));
     SetCheck(settingsControls_.logAutoClean, state_.settings.autoCleanLogs);
@@ -2515,13 +2539,14 @@ LRESULT Application::HandleSettingsMessage(HWND window, UINT message, WPARAM wPa
                 L"Veil Browser v0.2.0\n\n"
                 L"Lightweight Windows overlay browser / Browser overlay Windows ringan\n"
                 L"C++20 / Win32 / WebView2 1.0.4078.44\n\n"
-                L"https://github.com/azurplain/Mini-Window-Browser",
+                L"Fork: https://github.com/Cliffamr/Mini-Window-Browser\n"
+                L"Upstream: https://github.com/azurplain/Mini-Window-Browser",
                 L"About / Tentang Veil Browser", MB_OK | MB_ICONINFORMATION);
             return 0;
         }
         if (id == SettingsRepository) {
             const HINSTANCE opened = ShellExecuteW(
-                window, L"open", L"https://github.com/azurplain/Mini-Window-Browser",
+                window, L"open", L"https://github.com/Cliffamr/Mini-Window-Browser",
                 nullptr, nullptr, SW_SHOWNORMAL);
             if (reinterpret_cast<INT_PTR>(opened) <= 32) {
                 MessageBoxW(window, L"Cannot open the source URL / Tidak dapat membuka URL sumber.",
@@ -2641,6 +2666,11 @@ void Application::ShowBookmarkWindow() {
             L"Bookmarks / Markah · Veil Browser", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME,
             CW_USEDEFAULT, CW_USEDEFAULT, Scale(650), Scale(500), mainWindow_, nullptr, instance_, this);
         if (!bookmarkWindow_) return;
+        if (!ConfigureCaptureExclusion(bookmarkWindow_)) {
+            DestroyWindow(bookmarkWindow_);
+            bookmarkWindow_ = nullptr;
+            return;
+        }
         CenterOwnedWindow(bookmarkWindow_, Scale(650), Scale(500));
     }
     RebuildBookmarkList();
@@ -2795,6 +2825,11 @@ void Application::ShowPresetWindow() {
             L"Scenes / Skenario · Veil Browser", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME,
             CW_USEDEFAULT, CW_USEDEFAULT, Scale(620), Scale(490), mainWindow_, nullptr, instance_, this);
         if (!presetWindow_) return;
+        if (!ConfigureCaptureExclusion(presetWindow_)) {
+            DestroyWindow(presetWindow_);
+            presetWindow_ = nullptr;
+            return;
+        }
         CenterOwnedWindow(presetWindow_, Scale(620), Scale(490));
     }
     RebuildPresetList();
@@ -3006,7 +3041,7 @@ void Application::ApplyPreset(const Preset& preset) {
     state_.settings.autoPauseOnHide = preset.autoPauseOnHide;
     state_.settings.disableHotkeysOnTyping = preset.disableHotkeysOnTyping;
     state_.settings.useSystemTray = preset.useSystemTray;
-    state_.settings.backgroundMediaHotkeys = preset.backgroundMediaHotkeys;
+    state_.settings.backgroundMediaHotkeys = false;
     state_.settings.autoFitVideoFullscreen = preset.autoFitVideoFullscreen;
     state_.settings.lockVideoFullscreenAspect = preset.lockVideoFullscreenAspect;
     state_.settings.maximizedTopDragEnabled = preset.maximizedTopDragEnabled;
@@ -3016,6 +3051,9 @@ void Application::ApplyPreset(const Preset& preset) {
     state_.settings.renderMode = retainedRender;
     state_.settings.Clamp();
     state_.hotkeys = preset.hotkeys;
+    for (size_t index = 0; index < kHotkeyCount; ++index) {
+        if (IsMediaAction(static_cast<HotkeyAction>(index))) state_.hotkeys[index].enabled = false;
+    }
     webZoom_.Configure(state_.settings);
     windowModes_.ApplyPresetGeometry(preset.normalRect, preset.maximized);
     windowModes_.RefreshVisualState();

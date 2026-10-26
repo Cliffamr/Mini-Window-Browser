@@ -63,11 +63,11 @@ struct HotkeyBinding {
 inline std::array<HotkeyBinding, kHotkeyCount> DefaultHotkeys() {
     return {{
         {101, 0, L'0', L"Pass-through / Tembus klik"},
-        {102, 0, VK_OEM_3, L"Play/Pause / Putar/Jeda"},
-        {103, 0, L'5', L"Seek back / Mundur"},
-        {104, 0, L'6', L"Seek forward / Maju"},
-        {105, 0, L'7', L"Previous / Sebelumnya"},
-        {106, 0, L'8', L"Next / Berikutnya"},
+        {102, 0, VK_OEM_3, L"Play/Pause / Putar/Jeda", false},
+        {103, 0, L'5', L"Seek back / Mundur", false},
+        {104, 0, L'6', L"Seek forward / Maju", false},
+        {105, 0, L'7', L"Previous / Sebelumnya", false},
+        {106, 0, L'8', L"Next / Berikutnya", false},
         {107, 0, L'9', L"Hide/Show / Sembunyikan/Tampilkan"},
     }};
 }

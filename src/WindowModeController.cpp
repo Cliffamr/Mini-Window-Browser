@@ -439,8 +439,8 @@ RECT WindowModeController::CurrentMonitorRect(bool workArea) const {
 
 BYTE WindowModeController::ConfiguredAlpha() const {
     if (!settings_) return 255;
-    if (visibleMode_ == WindowMode::ImmersionHole) return 255;
-    const int percent = settings_->autoHideOpacityPercent;
+    const int percent = visibleMode_ == WindowMode::ImmersionHole
+        ? settings_->holeOpacityPercent : settings_->autoHideOpacityPercent;
     return static_cast<BYTE>(std::clamp((percent * 255 + 50) / 100, 0, 255));
 }
 

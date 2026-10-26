@@ -70,7 +70,7 @@ private:
     ULONGLONG automationCompletedAt_ = 0;
     ULONGLONG latestRequestSequence_ = 0;
     ULONGLONG imeTrailingUntil_ = 0;
-    std::wstring statusText_ = L"UI Automation 尚未运行";
+    std::wstring statusText_ = L"UI Automation not running / belum berjalan";
 };
 
 } // namespace xiaochuang

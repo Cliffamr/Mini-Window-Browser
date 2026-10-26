@@ -155,7 +155,7 @@
     <ClInclude Include="src\HotkeyManager.h" />
     <ClInclude Include="src\InputGuard.h" />
     <ClInclude Include="src\LogStore.h" />
-    <ClInclude Include="src\MediaBridge.h" />
+
     <ClInclude Include="src\ThemeManager.h" />
     <ClInclude Include="src\WindowModeController.h" />
     <ClInclude Include="src\WebViewZoom.h" />
@@ -174,7 +174,7 @@
   <ItemGroup>
     <None Include=".github\copilot-instructions.md" />
     <None Include="packages.config" />
-    <None Include="用户手册.md" />
+
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="小窗.cpp" />
@@ -184,7 +184,7 @@
     <ClCompile Include="src\Diagnostics.cpp" />
     <ClCompile Include="src\HotkeyManager.cpp" />
     <ClCompile Include="src\InputGuard.cpp" />
-    <ClCompile Include="src\MediaBridge.cpp" />
+
     <ClCompile Include="src\ThemeManager.cpp" />
     <ClCompile Include="src\WindowModeController.cpp" />
   </ItemGroup>

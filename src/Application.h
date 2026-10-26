@@ -14,7 +14,9 @@
 #include <wil/com.h>
 
 #include <array>
+#include <atomic>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -135,14 +137,15 @@ private:
     void InitializeWebView();
     bool PrepareTemporaryProfile();
     void CleanupTemporaryProfile();
-    bool ConfigureCaptureExclusion();
+    bool ConfigureCaptureExclusion(HWND window);
     bool ConfigureWebViewEvents();
+    void FailClosedWebView(const char* reason);
     void FinishInitialNavigation();
     void ResizeWebView();
     void ExecuteScript(const std::wstring& script);
     void ExecuteMediaAction(HotkeyAction action, HotkeyGesture gesture);
     void RequestMediaDiagnostics();
-    void HandleWebMessage(const std::wstring& message);
+
     void HandleWebFullscreenChanged();
     void HandleProcessFailure(COREWEBVIEW2_PROCESS_FAILED_KIND kind);
     void RecreateWebView();
@@ -254,11 +257,12 @@ private:
     int chromeHeight_ = 84;
     bool shuttingDown_ = false;
     bool webViewReady_ = false;
-    bool webTyping_ = false;
+
     bool hotkeysStarted_ = false;
     bool inputGuardStarted_ = false;
     bool webViewRecoveryPending_ = false;
     UINT64 webViewGeneration_ = 0;
+    std::shared_ptr<std::atomic_bool> lifetime_{std::make_shared<std::atomic_bool>(true)};
     bool trayIconAdded_ = false;
     std::wstring webViewVersion_;
     std::filesystem::path temporaryProfilePath_;
@@ -285,12 +289,10 @@ private:
     EventRegistrationToken navigationStartingToken_{};
     EventRegistrationToken navigationCompletedToken_{};
     EventRegistrationToken contentLoadingToken_{};
-    EventRegistrationToken sourceChangedToken_{};
-    EventRegistrationToken titleChangedToken_{};
-    EventRegistrationToken webMessageToken_{};
+
     EventRegistrationToken fullscreenToken_{};
     EventRegistrationToken newWindowToken_{};
-    EventRegistrationToken windowCloseToken_{};
+
     EventRegistrationToken downloadToken_{};
     EventRegistrationToken processFailedToken_{};
     EventRegistrationToken permissionToken_{};
@@ -337,6 +339,8 @@ private:
     UINT64 contentProbeSerial_ = 0;
     ULONGLONG lastContentRecoveryTick_ = 0;
     UINT64 waitingNavigationId_ = 0;
+    UINT64 activeNavigationId_ = 0;
+    int activeNavigationTabIndex_ = -1;
     ULONGLONG contentWaitStartedAt_ = 0;
     int settingsScrollPosition_ = 0;
 

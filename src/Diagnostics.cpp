@@ -15,10 +15,10 @@ std::wstring HagsState() {
     const LONG result = RegGetValueW(HKEY_LOCAL_MACHINE,
         L"SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers", L"HwSchMode",
         RRF_RT_REG_DWORD, nullptr, &value, &size);
-    if (result != ERROR_SUCCESS) return L"系统默认/未显式设置";
-    if (value == 2) return L"已开启";
-    if (value == 1) return L"已关闭";
-    return L"系统默认（值=" + std::to_wstring(value) + L"）";
+    if (result != ERROR_SUCCESS) return L"system default / bawaan sistem";
+    if (value == 2) return L"enabled / aktif";
+    if (value == 1) return L"disabled / nonaktif";
+    return L"system default / bawaan sistem (value=" + std::to_wstring(value) + L")";
 }
 
 const wchar_t* WindowModeText(WindowMode mode) {
@@ -46,11 +46,11 @@ std::wstring BuildSystemDiagnostics(const AppState& state,
         }
     }
     std::wostringstream output;
-    output << L"Mini Window Browser 1.4.5\r\n"
+    output << L"Veil Browser 0.2.0\r\n"
            << L"Windows: " << version.dwMajorVersion << L'.' << version.dwMinorVersion
            << L" build " << version.dwBuildNumber << L"\r\n"
            << L"HAGS: " << HagsState() << L"\r\n"
-           << L"WebView2 Runtime: " << (webViewVersion.empty() ? L"尚未初始化" : webViewVersion) << L"\r\n"
+           << L"WebView2 Runtime: " << (webViewVersion.empty() ? L"not initialized / belum dimulai" : webViewVersion) << L"\r\n"
            << L"RenderMode: " << (state.settings.renderMode == RenderMode::SoftwareCompatibility
                 ? L"Software compatibility (--disable-gpu)" : L"Automatic GPU") << L"\r\n"
            << L"WindowMode: " << WindowModeText(windowMode) << L"\r\n"
@@ -58,12 +58,9 @@ std::wstring BuildSystemDiagnostics(const AppState& state,
            << L"Hole refresh interval: " << state.settings.holeRefreshMs << L"ms\r\n"
            << L"Blank page check delay: " << state.settings.blankPageCheckSeconds << L"s\r\n"
            << L"Auto-hide opacity: " << state.settings.autoHideOpacityPercent << L"%\r\n"
-           << L"Hold rate: " << state.settings.holdPlaybackRate << L"x\r\n"
            << L"Fixed web zoom: " << (state.settings.fixedWebZoomEnabled ? L"enabled, " : L"disabled, ")
            << state.settings.fixedWebZoomPercent << L"%\r\n"
-           << L"Background media hotkeys: "
-           << (state.settings.backgroundMediaHotkeys ? L"enabled" : L"disabled") << L"\r\n"
-           << L"Mouse hotkeys: on-demand dedicated Raw Input thread (no WH_MOUSE_LL)\r\n";
+           << L"Page bridge: disabled / dinonaktifkan\r\n";
     return output.str();
 }
 

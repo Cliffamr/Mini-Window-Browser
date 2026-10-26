@@ -53,11 +53,11 @@ BEGIN
     BEGIN
         BLOCK "080404b0"
         BEGIN
-            VALUE "CompanyName", "AzurPlain\0"
+            VALUE "CompanyName", "Cliffamr\0"
             VALUE "FileDescription", "Veil Browser - Windows overlay browser\0"
             VALUE "FileVersion", "0.2.0.0\0"
             VALUE "InternalName", "VeilBrowser\0"
-            VALUE "LegalCopyright", "Copyright (c) 2026 AzurPlain\0"
+            VALUE "LegalCopyright", "Copyright (c) 2026 AzurPlain contributors and Cliffamr\0"
             VALUE "OriginalFilename", "VeilBrowser.exe\0"
             VALUE "ProductName", "Veil Browser\0"
             VALUE "ProductVersion", "0.2.0\0"

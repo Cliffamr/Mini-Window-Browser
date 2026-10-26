@@ -182,7 +182,7 @@ void InputGuard::Stop() {
     automationFocus_ = nullptr;
     latestRequestSequence_ = 0;
     imeTrailingUntil_ = 0;
-    statusText_ = L"UI Automation 尚未运行";
+    statusText_ = L"UI Automation not running / belum berjalan";
     if (instance_ == this) instance_ = nullptr;
 }
 
@@ -252,9 +252,9 @@ void InputGuard::HandleAsyncResult(LPARAM resultPointer) {
     automationTyping_ = result->typing;
     automationCompletedAt_ = GetTickCount64();
     statusText_ = result->automationAvailable ?
-        (L"UI Automation " + std::to_wstring(result->elapsedMilliseconds) + L" ms，结果=" +
-         (result->typing ? L"输入中" : L"非输入")) :
-        L"UI Automation 不可用";
+        (L"UI Automation " + std::to_wstring(result->elapsedMilliseconds) + L" ms, state=" +
+         (result->typing ? L"typing / mengetik" : L"not typing / tidak mengetik")) :
+        L"UI Automation unavailable / tidak tersedia";
     Refresh();
 }
 

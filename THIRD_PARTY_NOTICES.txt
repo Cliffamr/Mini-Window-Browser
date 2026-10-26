@@ -1,5 +1,9 @@
-Mini-Window-Browser v1.4.4 - Third-party notices
-======================================================
+Veil Browser 0.2.0 - Third-party notices
+==========================================
+
+Veil Browser is a GPL-3.0 fork of Mini-Window-Browser by AzurPlain.
+Upstream source: https://github.com/azurplain/Mini-Window-Browser
+Fork source: https://github.com/Cliffamr/Mini-Window-Browser
 
 Microsoft Edge WebView2 SDK 1.0.4078.44
 Copyright (c) Microsoft Corporation.
@@ -17,6 +21,6 @@ Project: https://github.com/microsoft/wil
 Package license: licenses/WIL-LICENSE.txt
 Package notices: licenses/WIL-ThirdPartyNotices.txt
 
-The v1.4 application icon was generated specifically for this project and does
+The upstream v1.4 application icon was generated specifically for this project and does
 not embed third-party trademarks or text. The UI is rendered with Windows
 Direct2D/DirectWrite and does not redistribute WinUI or Windows App SDK files.

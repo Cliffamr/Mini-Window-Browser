@@ -8,13 +8,14 @@ Veil Browser adalah browser overlay Windows ringan berbasis Win32 dan Microsoft 
 - Browser native Win32/WebView2; bukan Electron.
 - Address/search bar, Back, Next, Reload, close, minimize.
 - Maksimal lima tab. Hanya tab aktif mempunyai WebView; tab lain menyimpan URL/judul sehingga resource tidur, tetapi state formulir/video tidak dipertahankan saat berpindah.
-- Profil WebView sementara per proses; cookie/cache/login dihapus best-effort saat keluar.
+- Profil WebView sementara per proses; cookie/cache/login dihapus dengan retry saat keluar. Sisa profil akibat crash dibersihkan pada startup berikutnya; penghapusan saat crash tidak dapat dijamin.
 - Always-on-top dapat dinyalakan/dimatikan.
-- Opacity dan click-through melalui mode `Pass`; hotkey default `0` mengembalikan kontrol, hotkey default `9` menyembunyikan/menampilkan window.
+- Opacity dan click-through melalui mode `Pass`; `Esc` atau hotkey default `0` mengembalikan kontrol, hotkey default `9` menyembunyikan/menampilkan window.
 - `WDA_EXCLUDEFROMCAPTURE` diterapkan dan dibaca kembali sebelum window ditampilkan. Aplikasi fail-closed bila Windows menolaknya.
 - Navigasi top-level hanya HTTPS atau `about:blank`.
 - Popup, download, DevTools, context menu, host objects, script dialogs, izin kamera/mikrofon/lokasi/notifikasi ditolak.
 - Tidak memakai extension, sync, wallet, atau VPN.
+- Hotkey media upstream dinonaktifkan. Veil tidak menyuntikkan bridge script atau menerima pesan dari halaman remote.
 
 ## Batas perlindungan capture
 

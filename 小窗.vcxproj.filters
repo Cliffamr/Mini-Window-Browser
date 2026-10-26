@@ -34,7 +34,7 @@
     <ClInclude Include="src\Diagnostics.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="src\HotkeyManager.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="src\InputGuard.h"><Filter>头文件</Filter></ClInclude>
-    <ClInclude Include="src\MediaBridge.h"><Filter>头文件</Filter></ClInclude>
+
     <ClInclude Include="src\ThemeManager.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="src\WindowModeController.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="src\WebViewZoom.h"><Filter>头文件</Filter></ClInclude>
@@ -57,7 +57,7 @@
   <ItemGroup>
     <None Include="packages.config" />
     <None Include=".github\copilot-instructions.md" />
-    <None Include="用户手册.md" />
+
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natvis" />
@@ -73,7 +73,7 @@
     <ClCompile Include="src\Diagnostics.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="src\HotkeyManager.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="src\InputGuard.cpp"><Filter>源文件</Filter></ClCompile>
-    <ClCompile Include="src\MediaBridge.cpp"><Filter>源文件</Filter></ClCompile>
+
     <ClCompile Include="src\ThemeManager.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="src\WindowModeController.cpp"><Filter>源文件</Filter></ClCompile>
   </ItemGroup>

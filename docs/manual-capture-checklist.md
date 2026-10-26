@@ -23,7 +23,7 @@ Isi pada Windows tujuan. Simpan screenshot/video bukti. Ulangi dua urutan: **Vei
 - [ ] Address bar membuka HTTPS dan mencari teks.
 - [ ] HTTP/file/data/javascript ditolak.
 - [ ] Back, Next, Reload bekerja.
-- [ ] Pass mengaktifkan opacity/click-through; hotkey `0` memulihkan kontrol.
+- [ ] Pass mengaktifkan opacity/click-through; `Esc` atau hotkey `0` memulihkan kontrol.
 - [ ] Hotkey `9` menyembunyikan/menampilkan window.
 - [ ] Restart tidak mempertahankan cookie/login WebView.
 - [ ] Popup, download, kamera, mikrofon, lokasi, notifikasi ditolak.

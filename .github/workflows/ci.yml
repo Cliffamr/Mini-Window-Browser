@@ -27,6 +27,7 @@ jobs:
           & './x64/Release/XiaoChuang.Tests.exe'
           if ($LASTEXITCODE -ne 0) { throw 'Core tests failed' }
       - name: Run Veil native window smoke test
+        timeout-minutes: 12
         shell: pwsh
         run: |
           & './tests/VeilSmoke.ps1' -BuildDirectory './x64/Release'
