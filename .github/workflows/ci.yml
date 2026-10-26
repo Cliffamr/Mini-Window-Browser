@@ -43,22 +43,92 @@ jobs:
           Copy-Item $loader.FullName dist
           Copy-Item LICENSE.txt,THIRD_PARTY_NOTICES.txt dist
           Copy-Item README.md dist
+          New-Item -ItemType Directory -Path 'dist/docs' | Out-Null
+          Copy-Item 'docs/manual-capture-checklist.md' 'dist/docs/manual-capture-checklist.md'
           New-Item -ItemType Directory -Path 'dist/licenses' | Out-Null
           Copy-Item 'packages/Microsoft.Web.WebView2.1.0.4078.44/LICENSE.txt' 'dist/licenses/WebView2-SDK-LICENSE.txt'
           Copy-Item 'packages/Microsoft.Web.WebView2.1.0.4078.44/NOTICE.txt' 'dist/licenses/WebView2-SDK-NOTICE.txt'
           Copy-Item 'packages/Microsoft.Windows.ImplementationLibrary.1.0.250325.1/LICENSE' 'dist/licenses/WIL-LICENSE.txt'
           Copy-Item 'packages/Microsoft.Windows.ImplementationLibrary.1.0.250325.1/ThirdPartyNotices.txt' 'dist/licenses/WIL-ThirdPartyNotices.txt'
           "Corresponding source: https://github.com/${{ github.repository }}/tree/${{ github.sha }}" | Set-Content 'dist/SOURCE.txt'
+          $privatePayload = @(Get-ChildItem dist -Recurse -Force | Where-Object {
+            $_.Name -in @('config.ini','config.ini.tmp','Cookies','History') -or
+            $_.Name -match '\.WebView2$' -or ($_.PSIsContainer -and $_.Name -eq 'logs')
+          })
+          if ($privatePayload.Count -ne 0) { throw "Portable payload contains private runtime data: $($privatePayload.FullName -join ', ')" }
       - name: Build unsigned installer
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
           & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' 'installer\VeilBrowser.iss'
           if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+      - name: Verify installed payload
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = (Resolve-Path 'installer-output/Veil-Browser_0.2.0_x64-setup.exe').Path
+          if ((Get-AuthenticodeSignature $installer).Status -ne 'NotSigned') { throw 'Installer signing state is unexpected' }
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'VeilBrowserInstalled'
+          $installLog = Join-Path $env:RUNNER_TEMP 'veil-install.log'
+          $installProcess = Start-Process $installer -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
+            "/DIR=$installDirectory", "/LOG=$installLog"
+          ) -Wait -PassThru
+          if ($installProcess.ExitCode -ne 0) {
+            if (Test-Path $installLog) { Get-Content $installLog }
+            throw "Silent installer failed with exit code $($installProcess.ExitCode)"
+          }
+          $installedExecutable = Join-Path $installDirectory 'VeilBrowser.exe'
+          if (-not (Test-Path $installedExecutable)) { throw 'Installed executable missing' }
+          $installedProcess = Start-Process $installedExecutable -WorkingDirectory $installDirectory -PassThru
+          for ($attempt = 0; $attempt -lt 100; $attempt++) {
+            $installedProcess.Refresh()
+            if ($installedProcess.HasExited -or $installedProcess.MainWindowHandle -ne [IntPtr]::Zero) { break }
+            Start-Sleep -Milliseconds 100
+          }
+          if ($installedProcess.HasExited -or $installedProcess.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Installed executable did not create a window' }
+          if (-not $installedProcess.CloseMainWindow()) { throw 'Installed executable did not accept close' }
+          if (-not $installedProcess.WaitForExit(10000)) { $installedProcess.Kill($true); throw 'Installed executable did not exit' }
+          & './tests/VeilSmoke.ps1' -BuildDirectory $installDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'Installed payload smoke test failed' }
+          Remove-Item (Join-Path $installDirectory 'config.ini'),(Join-Path $installDirectory 'config.ini.tmp') -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path $installDirectory 'logs') -Recurse -Force -ErrorAction SilentlyContinue
+          $privatePayload = @(Get-ChildItem $installDirectory -Recurse -Force | Where-Object {
+            $_.Name -in @('config.ini','config.ini.tmp','Cookies','History') -or
+            $_.Name -match '\.WebView2$' -or ($_.PSIsContainer -and $_.Name -eq 'logs')
+          })
+          if ($privatePayload.Count -ne 0) { throw "Installed payload contains private runtime data: $($privatePayload.FullName -join ', ')" }
+          $uninstaller = Join-Path $installDirectory 'unins000.exe'
+          if (-not (Test-Path $uninstaller)) { throw 'Uninstaller missing' }
+          $uninstallLog = Join-Path $env:RUNNER_TEMP 'veil-uninstall.log'
+          $uninstallProcess = Start-Process $uninstaller -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$uninstallLog"
+          ) -Wait -PassThru
+          if ($uninstallProcess.ExitCode -ne 0) {
+            if (Test-Path $uninstallLog) { Get-Content $uninstallLog }
+            throw "Silent uninstall failed with exit code $($uninstallProcess.ExitCode)"
+          }
+          for ($attempt = 0; $attempt -lt 40 -and (Test-Path $installDirectory); $attempt++) {
+            Start-Sleep -Milliseconds 250
+          }
+          if (Test-Path $installDirectory) { throw 'Uninstall left application data behind' }
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          $targets = @((Get-ChildItem dist -Recurse -File | ForEach-Object FullName) +
+            (Resolve-Path 'installer-output/Veil-Browser_0.2.0_x64-setup.exe').Path) | Sort-Object
+          $lines = foreach ($target in $targets) {
+            $hash = (Get-FileHash $target -Algorithm SHA256).Hash.ToLowerInvariant()
+            $relative = [IO.Path]::GetRelativePath((Get-Location).Path, $target).Replace('\','/')
+            "$hash  $relative"
+          }
+          $lines | Set-Content 'SHA256SUMS.txt' -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
           name: veil-browser-windows-x64
           path: |
             dist
             installer-output/Veil-Browser_0.2.0_x64-setup.exe
+            SHA256SUMS.txt
           if-no-files-found: error

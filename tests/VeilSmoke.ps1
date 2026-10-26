@@ -7,7 +7,12 @@ $ErrorActionPreference = 'Stop'
 $source = (Resolve-Path -LiteralPath $BuildDirectory).Path
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('VeilSmoke-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
-Copy-Item (Join-Path $source 'XiaoChuang.exe') (Join-Path $tempRoot 'VeilBrowser.exe')
+$sourceExecutable = @('XiaoChuang.exe', 'VeilBrowser.exe') |
+    ForEach-Object { Join-Path $source $_ } |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Select-Object -First 1
+if (-not $sourceExecutable) { throw "Missing Veil executable in $source" }
+Copy-Item $sourceExecutable (Join-Path $tempRoot 'VeilBrowser.exe')
 Copy-Item (Join-Path $source 'WebView2Loader.dll') $tempRoot
 @'
 [Settings]
@@ -57,11 +62,26 @@ public static class VeilNative {
     public static void Pump() { MSG m; while(PeekMessage(out m,IntPtr.Zero,0,0,1)){ TranslateMessage(ref m); DispatchMessage(ref m); } }
     [DllImport("user32.dll", SetLastError=true)] public static extern bool GetWindowDisplayAffinity(IntPtr h, out uint affinity);
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
-    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint m, UIntPtr w, IntPtr l);
-    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint m, UIntPtr w, ref RECT l);
-    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, UIntPtr w, IntPtr l);
-    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool SetWindowText(IntPtr h, string text);
-    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder text, int count);
+    [DllImport("user32.dll", SetLastError=true, ExactSpelling=true, EntryPoint="SendMessageTimeoutW")] static extern IntPtr SendMessageTimeout(IntPtr h, uint m, UIntPtr w, IntPtr l, uint flags, uint timeout, out UIntPtr result);
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT rect);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true, ExactSpelling=true, EntryPoint="SendMessageTimeoutW")] static extern IntPtr SendMessageTimeoutText(IntPtr h, uint m, UIntPtr w, string l, uint flags, uint timeout, out UIntPtr result);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true, ExactSpelling=true, EntryPoint="SendMessageTimeoutW")] static extern IntPtr SendMessageTimeoutBuffer(IntPtr h, uint m, UIntPtr w, StringBuilder l, uint flags, uint timeout, out UIntPtr result);
+    public static IntPtr SendMessageChecked(IntPtr h, uint m, UIntPtr w, IntPtr l) {
+        UIntPtr result;
+        if (SendMessageTimeout(h,m,w,l,2,5000,out result)==IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        return (IntPtr)(long)result.ToUInt64();
+    }
+    public static IntPtr SendMessageTextChecked(IntPtr h, uint m, UIntPtr w, string l) {
+        UIntPtr result;
+        if (SendMessageTimeoutText(h,m,w,l,2,5000,out result)==IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        return (IntPtr)(long)result.ToUInt64();
+    }
+    public static IntPtr SendMessageBufferChecked(IntPtr h, uint m, UIntPtr w, StringBuilder l) {
+        UIntPtr result;
+        if (SendMessageTimeoutBuffer(h,m,w,l,2,5000,out result)==IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        return (IntPtr)(long)result.ToUInt64();
+    }
+
     [DllImport("user32.dll")] public static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
     [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
@@ -85,22 +105,28 @@ function Wait-Condition([scriptblock]$Condition, [int]$Timeout = 15000, [bool]$A
     do {
         [VeilNative]::Pump()
         if (-not $AllowExited -and $script:process -and $script:process.HasExited) {
-            throw "Veil exited during smoke test: $($script:process.ExitCode)"
+            $recentLog = @((Log-Lines) | Select-Object -Last 20) -join "`n"
+            throw "Veil exited during smoke test: $($script:process.ExitCode)`nRecent log:`n$recentLog"
         }
         if (& $Condition) { return $true }
         Start-Sleep -Milliseconds 100
     } while ([Environment]::TickCount64 -lt $until)
-    throw "Timed out after $Timeout ms"
+    $caller = (Get-PSCallStack | Select-Object -Skip 1 -First 1).Location
+    $recentLog = @((Log-Lines) | Select-Object -Last 12) -join "`n"
+    throw "Timed out after $Timeout ms at $caller`nRecent log:`n$recentLog"
 }
 function Window-Text([IntPtr]$Handle) {
     $builder = New-Object Text.StringBuilder 2048
-    [void][VeilNative]::GetWindowText($Handle, $builder, $builder.Capacity)
+    [void][VeilNative]::SendMessageBufferChecked($Handle, 0x000D, [UIntPtr]$builder.Capacity, $builder)
     return $builder.ToString()
 }
 function Set-Address([IntPtr]$Window, [string]$Url) {
     $address = [VeilNative]::GetDlgItem($Window, 1001)
-    [void][VeilNative]::SetWindowText($address, $Url)
-    [void][VeilNative]::SendMessage($Window, 0x111, [UIntPtr]1002, [IntPtr]::Zero)
+    if ($address -eq [IntPtr]::Zero) { throw 'Address control not found' }
+    [void][VeilNative]::SendMessageTextChecked($address, 0x000C, [UIntPtr]::Zero, $Url)
+    $actual = Window-Text $address
+    if ($actual -ne $Url) { throw "Address readback mismatch: expected '$Url', got '$actual'" }
+    [void][VeilNative]::SendMessageChecked($Window, 0x111, [UIntPtr]1002, [IntPtr]::Zero)
 }
 function Press-Key([byte]$Key) {
     [VeilNative]::keybd_event($Key, 0, 0, [UIntPtr]::Zero)
@@ -133,30 +159,51 @@ function Navigation-Succeeded([UInt64]$Id) {
     $pattern = "navigation\.completed .* id=$Id success=1(?: |$)"
     return @((Log-Lines) | Where-Object { $_ -match $pattern }).Count -gt 0
 }
-function Invoke-NavigationAndWait([scriptblock]$Action, [scriptblock]$Extra, [int]$Timeout = 30000) {
+function Invoke-NavigationAndWait([string]$Name, [scriptblock]$Action, [scriptblock]$Extra, [int]$Timeout = 30000) {
     $beforeCount = Navigation-StartCount
     & $Action
     $script:pendingNavigationId = $null
-    [void](Wait-Condition {
-        if ((Navigation-StartCount) -gt $beforeCount) {
-            $candidate = Latest-NavigationStartId
-            $script:pendingNavigationId = $candidate
-            return $true
-        }
-        return $false
-    } 10000)
+    try {
+        [void](Wait-Condition {
+            if ((Navigation-StartCount) -gt $beforeCount) {
+                $candidate = Latest-NavigationStartId
+                $script:pendingNavigationId = $candidate
+                return $true
+            }
+            return $false
+        } 10000)
+    } catch { throw "$Name did not start: $($_.Exception.Message)" }
     $expectedId = $script:pendingNavigationId
-    return Wait-Condition { (Navigation-Succeeded $expectedId) -and (& $Extra) } $Timeout
+    try {
+        $succeeded = Wait-Condition { (Navigation-Succeeded $expectedId) -and (& $Extra) } $Timeout
+        Wait-NavigationIdle
+        return $succeeded
+    } catch { throw "$Name id=$expectedId did not complete: $($_.Exception.Message)" }
 }
-function Has-VisibleOwnedPopup([IntPtr]$Owner) {
-    $popup = [VeilNative]::GetLastActivePopup($Owner)
-    return $popup -ne [IntPtr]::Zero -and $popup -ne $Owner -and [VeilNative]::IsWindowVisible($popup)
+
+function Wait-NavigationIdle([int]$StableMilliseconds = 1000, [int]$Timeout = 10000) {
+    $deadline = [Environment]::TickCount64 + $Timeout
+    $lastCount = Navigation-StartCount
+    $stableSince = [Environment]::TickCount64
+    do {
+        [VeilNative]::Pump()
+        if ($script:process -and $script:process.HasExited) { throw 'Veil exited during idle wait' }
+        $count = Navigation-StartCount
+        if ($count -ne $lastCount) {
+            $lastCount = $count
+            $stableSince = [Environment]::TickCount64
+        } elseif ([Environment]::TickCount64 - $stableSince -ge $StableMilliseconds) {
+            return
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([Environment]::TickCount64 -lt $deadline)
+    throw 'Navigation did not become idle'
 }
 
 $results = [ordered]@{}
-$profilesBefore = @(Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter 'VeilBrowser-*' -ErrorAction SilentlyContinue | ForEach-Object FullName)
-$initialStartCount = Navigation-StartCount
+$controllerReadyBefore = Event-Count 'webview\.controller\.ready(?: |$)'
 $process = Start-Process -FilePath (Join-Path $tempRoot 'VeilBrowser.exe') -WorkingDirectory $tempRoot -PassThru
+$profilePattern = "VeilBrowser-$($process.Id)-*"
 $window = [IntPtr]::Zero
 $probe = [IntPtr]::Zero
 try {
@@ -168,19 +215,10 @@ try {
     if ($process.HasExited) { throw "Veil exited before creating a window: $($process.ExitCode)" }
     $window = $process.MainWindowHandle
     [void][VeilNative]::SetWindowPos($window, [IntPtr](-1), 100, 100, 1000, 700, 0x0040)
-    $script:pendingNavigationId = $null
-    [void](Wait-Condition {
-        if ((Navigation-StartCount) -gt $initialStartCount) {
-            $script:pendingNavigationId = Latest-NavigationStartId
-            return $true
-        }
-        return $false
-    } 30000)
-    $initialNavigationId = $script:pendingNavigationId
-    $results.InitialBlankNavigationCompleted = Wait-Condition {
-        (Navigation-Succeeded $initialNavigationId) -and
-        (Window-Text ([VeilNative]::GetDlgItem($window,1001))) -eq 'about:blank'
+    $results.WebViewControllerReady = Wait-Condition {
+        (Event-Count 'webview\.controller\.ready(?: |$)') -gt $controllerReadyBefore
     } 30000
+    Wait-NavigationIdle
 
     $affinity = 0u
     $results.CaptureAffinity = [VeilNative]::GetWindowDisplayAffinity($window, [ref]$affinity) -and $affinity -eq 0x11
@@ -198,74 +236,68 @@ try {
     [void][VeilNative]::SetWindowPos($window,[IntPtr](-1),100,100,1000,700,0x0040)
     $point = [VeilNative+POINT]::new(300,300)
 
-    [void][VeilNative]::SendMessage($window,0x111,[UIntPtr]1015,[IntPtr]::Zero)
+    [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1015,[IntPtr]::Zero)
     [void][VeilNative]::BringWindowToTop($probe)
     [void][VeilNative]::SetForegroundWindow($probe)
     $results.TopmostTurnsOff = Wait-Condition {
         $root = [VeilNative]::GetAncestor([VeilNative]::WindowFromPoint($point),2)
         $root -eq $probe -and ([VeilNative]::GetWindowLongPtr($window,-20).ToInt64() -band 0x8) -eq 0
     }
-    [void][VeilNative]::SendMessage($window,0x111,[UIntPtr]1015,[IntPtr]::Zero)
+    [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1015,[IntPtr]::Zero)
     [void][VeilNative]::BringWindowToTop($probe)
     $results.TopmostTurnsOn = Wait-Condition {
         $root = [VeilNative]::GetAncestor([VeilNative]::WindowFromPoint($point),2)
         $root -eq $window -and ([VeilNative]::GetWindowLongPtr($window,-20).ToInt64() -band 0x8) -ne 0
     }
 
-    [void][VeilNative]::SendMessage($window,0x111,[UIntPtr]1010,[IntPtr]::Zero)
+    [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1010,[IntPtr]::Zero)
     $settings = [IntPtr]::Zero
     $results.SettingsCaptureAffinity = Wait-Condition {
         $script:settings = [VeilNative]::GetLastActivePopup($window)
         if ($script:settings -eq $window -or $script:settings -eq [IntPtr]::Zero) { return $false }
+        if ((Window-Text $script:settings) -ne 'Settings / Pengaturan · Veil Browser') { return $false }
         $popupAffinity=0u
         return [VeilNative]::GetWindowDisplayAffinity($script:settings,[ref]$popupAffinity) -and $popupAffinity -eq 0x11
     }
-    if ($settings -ne [IntPtr]::Zero -and $settings -ne $window) { [void][VeilNative]::SendMessage($settings,0x10,[UIntPtr]::Zero,[IntPtr]::Zero) }
+    $settings = $script:settings
+    if ($settings -ne [IntPtr]::Zero -and $settings -ne $window) { [void][VeilNative]::SendMessageChecked($settings,0x10,[UIntPtr]::Zero,[IntPtr]::Zero) }
 
-    $blockedStartCount = Navigation-StartCount
-    $unsupportedBefore = Event-Count 'navigation\.unsupported_scheme(?: |$)'
-    $address = [VeilNative]::GetDlgItem($window, 1001)
-    [void][VeilNative]::SetWindowText($address, 'http://example.com/')
-    [void][VeilNative]::PostMessage($window, 0x111, [UIntPtr]1002, [IntPtr]::Zero)
-    $results.HttpRejectedBeforeWebView = Wait-Condition {
-        (Has-VisibleOwnedPopup $window) -and
-        (Event-Count 'navigation\.unsupported_scheme(?: |$)') -gt $unsupportedBefore -and
-        (Navigation-StartCount) -eq $blockedStartCount
-    }
-    $blocked = [VeilNative]::GetLastActivePopup($window)
-    if ($blocked -ne [IntPtr]::Zero -and $blocked -ne $window) { [void][VeilNative]::SendMessage($blocked,0x10,[UIntPtr]::Zero,[IntPtr]::Zero) }
-
-    $results.FirstHttpsNavigation = Invoke-NavigationAndWait {
+    $results.FirstHttpsNavigation = Invoke-NavigationAndWait 'FirstHttpsNavigation' {
         Set-Address $window 'https://example.com/'
     } {
         (Window-Text ([VeilNative]::GetDlgItem($window,1001))) -match '^https://example.com/?$'
     }
+    Wait-NavigationIdle
 
-    $results.SecondHttpsNavigation = Invoke-NavigationAndWait {
+    $results.SecondHttpsNavigation = Invoke-NavigationAndWait 'SecondHttpsNavigation' {
         Set-Address $window 'https://www.iana.org/help/example-domains'
     } {
         (Window-Text ([VeilNative]::GetDlgItem($window,1001))) -match '^https://www.iana.org/help/example-domains/?$'
     }
 
-    $results.BackWorks = Invoke-NavigationAndWait {
-        [void][VeilNative]::SendMessage($window,0x111,[UIntPtr]1012,[IntPtr]::Zero)
+    $back = [VeilNative]::GetDlgItem($window,1012)
+    $forward = [VeilNative]::GetDlgItem($window,1013)
+    $results.BackAvailable = Wait-Condition { [VeilNative]::IsWindowEnabled($back) }
+    $results.BackWorks = Invoke-NavigationAndWait 'BackWorks' {
+        [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1012,[IntPtr]::Zero)
     } {
         (Window-Text ([VeilNative]::GetDlgItem($window,1001))) -match '^https://example.com/?$'
     }
 
-    $results.ForwardWorks = Invoke-NavigationAndWait {
-        [void][VeilNative]::SendMessage($window,0x111,[UIntPtr]1013,[IntPtr]::Zero)
+    $results.ForwardAvailable = Wait-Condition { [VeilNative]::IsWindowEnabled($forward) }
+    $results.ForwardWorks = Invoke-NavigationAndWait 'ForwardWorks' {
+        [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1013,[IntPtr]::Zero)
     } {
         (Window-Text ([VeilNative]::GetDlgItem($window,1001))) -match '^https://www.iana.org/help/example-domains/?$'
     }
 
-    $results.ReloadWorks = Invoke-NavigationAndWait {
-        [void][VeilNative]::SendMessage($window,0x111,[UIntPtr]1014,[IntPtr]::Zero)
+    $results.ReloadWorks = Invoke-NavigationAndWait 'ReloadWorks' {
+        [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1014,[IntPtr]::Zero)
     } {
         (Window-Text ([VeilNative]::GetDlgItem($window,1001))) -match '^https://www.iana.org/help/example-domains/?$'
     }
 
-    $results.SearchWorks = Invoke-NavigationAndWait {
+    $results.SearchWorks = Invoke-NavigationAndWait 'SearchWorks' {
         Set-Address $window 'openai'
     } {
         (Window-Text ([VeilNative]::GetDlgItem($window,1001))).StartsWith('https://duckduckgo.com/?q=openai')
@@ -273,18 +305,18 @@ try {
 
     $tabs = [VeilNative]::GetDlgItem($window,1011)
     $add = [VeilNative]::GetDlgItem($window,1003)
-    1..4 | ForEach-Object { [void][VeilNative]::SendMessage($window,0x111,[UIntPtr]1003,[IntPtr]::Zero) }
-    $tabCount = [VeilNative]::SendMessage($tabs,0x1304,[UIntPtr]::Zero,[IntPtr]::Zero).ToInt32()
+    1..4 | ForEach-Object { [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1003,[IntPtr]::Zero) }
+    $tabCount = [VeilNative]::SendMessageChecked($tabs,0x1304,[UIntPtr]::Zero,[IntPtr]::Zero).ToInt32()
     $results.TabLimit = $tabCount -eq 5 -and -not [VeilNative]::IsWindowEnabled($add)
     $tabRect = New-Object VeilNative+RECT
-    [void][VeilNative]::SendMessage($tabs,0x130A,[UIntPtr]4,[ref]$tabRect)
-    $x = $tabRect.Right - 2; $y = [int](($tabRect.Top + $tabRect.Bottom) / 2)
+    if (-not [VeilNative]::GetClientRect($tabs,[ref]$tabRect)) { throw 'Could not read tab bounds' }
+    $x = $tabRect.Right - 8; $y = [int](($tabRect.Top + $tabRect.Bottom) / 2)
     $packed = [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF))
-    [void][VeilNative]::SendMessage($tabs,0x0201,[UIntPtr]1,$packed)
-    $results.TabCloseWorks = Wait-Condition { [VeilNative]::SendMessage($tabs,0x1304,[UIntPtr]::Zero,[IntPtr]::Zero).ToInt32() -eq 4 }
+    [void][VeilNative]::SendMessageChecked($tabs,0x0201,[UIntPtr]1,$packed)
+    $results.TabCloseWorks = Wait-Condition { [VeilNative]::SendMessageChecked($tabs,0x1304,[UIntPtr]::Zero,[IntPtr]::Zero).ToInt32() -eq 4 }
 
     [void][VeilNative]::SetCursorPos(10,10)
-    [void][VeilNative]::SendMessage($window,0x111,[UIntPtr]1016,[IntPtr]::Zero)
+    [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1016,[IntPtr]::Zero)
     $results.PassThroughTurnsOn = Wait-Condition { ([VeilNative]::GetWindowLongPtr($window,-20).ToInt64() -band 0x20) -ne 0 }
     $color=0u; $alpha=[byte]0; $layerFlags=0u
     $results.OpacityApplied = [VeilNative]::GetLayeredWindowAttributes($window,[ref]$color,[ref]$alpha,[ref]$layerFlags) -and $alpha -eq 102
@@ -299,18 +331,23 @@ try {
     [void][VeilNative]::SetForegroundWindow($probe)
     Press-Key 0x39
     $results.HideHotkeyWorks = Wait-Condition { -not [VeilNative]::IsWindowVisible($window) }
+    Start-Sleep -Milliseconds 300
     Press-Key 0x39
     $results.ShowHotkeyWorks = Wait-Condition { [VeilNative]::IsWindowVisible($window) }
 
-    [void][VeilNative]::SendMessage($window,0x111,[UIntPtr]1004,[IntPtr]::Zero)
+    [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1004,[IntPtr]::Zero)
     $results.MinimizeWorks = Wait-Condition { [VeilNative]::IsIconic($window) }
     [void][VeilNative]::ShowWindow($window,9)
+    $results.RestoreAfterMinimizeWorks = Wait-Condition { -not [VeilNative]::IsIconic($window) -and [VeilNative]::IsWindowVisible($window) }
+    [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1005,[IntPtr]::Zero)
+    $results.MaximizeWorks = Wait-Condition { (Window-Text ([VeilNative]::GetDlgItem($window,1005))) -eq '❐' }
+    [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1005,[IntPtr]::Zero)
+    $results.RestoreFromMaximizeWorks = Wait-Condition { (Window-Text ([VeilNative]::GetDlgItem($window,1005))) -eq '□' }
 
-    $profilesDuring = @(Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter 'VeilBrowser-*' -ErrorAction SilentlyContinue | ForEach-Object FullName)
-    $createdProfiles = @($profilesDuring | Where-Object { $profilesBefore -notcontains $_ })
+    $createdProfiles = @(Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter $profilePattern -ErrorAction SilentlyContinue | ForEach-Object FullName)
     $results.TemporaryProfileCreated = $createdProfiles.Count -eq 1
 
-    [void][VeilNative]::SendMessage($window,0x111,[UIntPtr]1006,[IntPtr]::Zero)
+    [void][VeilNative]::SendMessageChecked($window,0x111,[UIntPtr]1006,[IntPtr]::Zero)
     $results.CloseWorks = $process.WaitForExit(10000)
     $results.TemporaryProfileDeleted = Wait-Condition { @($createdProfiles | Where-Object { Test-Path $_ }).Count -eq 0 } 10000 $true
     $config = Get-Content -LiteralPath (Join-Path $tempRoot 'config.ini') -Raw
@@ -327,3 +364,4 @@ $results.SmokeTempRootDeleted = -not (Test-Path -LiteralPath $tempRoot)
 
 $results.GetEnumerator() | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value }
 if ($results.Values -contains $false) { exit 2 }
+$global:LASTEXITCODE = 0

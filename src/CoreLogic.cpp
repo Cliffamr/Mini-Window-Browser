@@ -1,6 +1,3 @@
-#include <winsock2.h>
-#include <ws2tcpip.h>
-
 #include "CoreLogic.h"
 
 #include <algorithm>
@@ -10,7 +7,7 @@
 #include <winhttp.h>
 
 #pragma comment(lib, "winhttp.lib")
-#pragma comment(lib, "ws2_32.lib")
+
 
 namespace xiaochuang {
 
@@ -307,31 +304,21 @@ bool IsSupportedWebNavigationUrl(std::wstring url) {
     if (components.nScheme != INTERNET_SCHEME_HTTPS || components.dwHostNameLength == 0 ||
         components.dwUserNameLength != 0 || components.dwPasswordLength != 0) return false;
     const std::wstring_view host(components.lpszHostName, components.dwHostNameLength);
-    const bool ipv6 = host.find(L':') != std::wstring_view::npos;
-    if (ipv6) {
-        if (url.size() < 9 || _wcsnicmp(url.c_str(), L"https://[", 9) != 0) return false;
-        std::wstring address(host);
-        if (address.size() >= 2 && address.front() == L'[' && address.back() == L']') {
-            address = address.substr(1, address.size() - 2);
-        }
-        IN6_ADDR parsed{};
-        if (InetPtonW(AF_INET6, address.c_str(), &parsed) != 1) return false;
-    } else {
-        for (const wchar_t value : host) {
-            const bool asciiAlphaNumeric = (value >= L'a' && value <= L'z') ||
-                (value >= L'A' && value <= L'Z') || (value >= L'0' && value <= L'9');
-            if (!(asciiAlphaNumeric || value == L'-' || value == L'.')) return false;
-        }
-        if (host.size() > 253 || host.front() == L'.' || host.back() == L'.') return false;
-        size_t start = 0;
-        while (start < host.size()) {
-            const size_t dot = host.find(L'.', start);
-            const std::wstring_view label = host.substr(start,
-                dot == std::wstring_view::npos ? host.size() - start : dot - start);
-            if (label.empty() || label.size() > 63 || label.front() == L'-' || label.back() == L'-') return false;
-            if (dot == std::wstring_view::npos) break;
-            start = dot + 1;
-        }
+    if (host.find(L':') != std::wstring_view::npos) return false;
+    for (const wchar_t value : host) {
+        const bool asciiAlphaNumeric = (value >= L'a' && value <= L'z') ||
+            (value >= L'A' && value <= L'Z') || (value >= L'0' && value <= L'9');
+        if (!(asciiAlphaNumeric || value == L'-' || value == L'.')) return false;
+    }
+    if (host.size() > 253 || host.front() == L'.' || host.back() == L'.') return false;
+    size_t start = 0;
+    while (start < host.size()) {
+        const size_t dot = host.find(L'.', start);
+        const std::wstring_view label = host.substr(start,
+            dot == std::wstring_view::npos ? host.size() - start : dot - start);
+        if (label.empty() || label.size() > 63 || label.front() == L'-' || label.back() == L'-') return false;
+        if (dot == std::wstring_view::npos) break;
+        start = dot + 1;
     }
     return true;
 }

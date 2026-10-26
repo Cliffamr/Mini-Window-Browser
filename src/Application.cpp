@@ -322,6 +322,8 @@ void Application::CreateMainControls() {
         ? L"Top:on / Atas:aktif" : L"Top:off / Atas:nonaktif");
     SetWindowTextW(clickThroughButton_, windowModes_.IsImmersive()
         ? L"Pass:on / Tembus:aktif" : L"Pass:off / Tembus:nonaktif");
+    EnableWindow(backButton_, FALSE);
+    EnableWindow(forwardButton_, FALSE);
 
     const HWND controls[] = {addressEdit_, tabControl_, backButton_, forwardButton_, reloadButton_,
         goButton_, addTabButton_, topmostButton_, clickThroughButton_, minimizeButton_,
@@ -549,10 +551,17 @@ LRESULT Application::HandleMainMessage(HWND window, UINT message, WPARAM wParam,
     }
     case WM_COMMAND: {
         const int id = LOWORD(wParam);
-        if (id == Go) NavigateAddressBar();
-        else if (id == Back && webView_) webView_->GoBack();
-        else if (id == Forward && webView_) webView_->GoForward();
-        else if (id == Reload && webView_) webView_->Reload();
+        if (id == Address && HIWORD(wParam) == EN_CHANGE && !updatingAddressEdit_) {
+            addressEditDirty_ = true;
+        }
+        else if (id == Go) NavigateAddressBar();
+        else if (id == Back) NavigateHistory(-1);
+        else if (id == Forward) NavigateHistory(1);
+        else if (id == Reload && webView_) {
+            const HRESULT actionResult = webView_->Reload();
+            logs_.Write("navigation.reload",
+                "action_hr=" + std::to_string(static_cast<unsigned long>(actionResult)));
+        }
         else if (id == AddTab) CreateNewTab(state_.settings.homeUrl, L"New tab", true);
         else if (id == Topmost) {
             windowModes_.ToggleAlwaysOnTop();
@@ -1012,8 +1021,8 @@ bool Application::PrepareTemporaryProfile() {
     if (GetTempPathW(static_cast<DWORD>(std::size(tempDirectory)), tempDirectory) == 0) return false;
     const std::filesystem::path tempRoot(tempDirectory);
     std::error_code error;
-    for (std::filesystem::directory_iterator iter(tempRoot, error), end;
-         !error && iter != end; iter.increment(error)) {
+    for (std::filesystem::directory_iterator iter(tempRoot, error), iteratorEnd;
+         !error && iter != iteratorEnd; iter.increment(error)) {
         const auto& entry = *iter;
         const std::wstring name = entry.path().filename().wstring();
         if (!name.starts_with(kTemporaryProfilePrefix)) continue;
@@ -1021,9 +1030,9 @@ bool Application::PrepareTemporaryProfile() {
         const size_t separator = name.find(L'-', pidStart);
         if (separator == std::wstring::npos) continue;
         const std::wstring pidText = name.substr(pidStart, separator - pidStart);
-        wchar_t* end = nullptr;
-        const DWORD processId = wcstoul(pidText.c_str(), &end, 10);
-        if (processId == 0 || !end || *end != L'\0') continue;
+        wchar_t* parseEnd = nullptr;
+        const DWORD processId = wcstoul(pidText.c_str(), &parseEnd, 10);
+        if (processId == 0 || !parseEnd || *parseEnd != L'\0') continue;
         bool processActive = false;
         if (HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, processId)) {
             processActive = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
@@ -1208,8 +1217,17 @@ bool Application::ConfigureWebViewEvents() {
                     EndContentWait();
                     return cancelResult;
                 }
+                if (pendingHistoryIndex_) {
+                    if (pendingHistoryNavigationId_ == 0) {
+                        pendingHistoryNavigationId_ = navigationId;
+                    } else if (pendingHistoryNavigationId_ != navigationId) {
+                        pendingHistoryIndex_.reset();
+                        pendingHistoryNavigationId_ = 0;
+                    }
+                }
                 activeNavigationId_ = navigationId;
                 activeNavigationTabIndex_ = state_.currentTabIndex;
+                activeNavigationUrl_ = uri.get();
                 if (waitingForTabContent_) waitingNavigationId_ = navigationId;
                 logs_.Write("navigation.start",
                     "generation=" + std::to_string(webViewGeneration_) +
@@ -1254,9 +1272,15 @@ bool Application::ConfigureWebViewEvents() {
                 if (waitingForTabContent_) {
                     EndContentWait();
                 }
-                wil::unique_cotaskmem_string source;
-                if (webView_ && SUCCEEDED(webView_->get_Source(&source)) && source) {
-                    UpdateCurrentTabUrl(source.get());
+                if (succeeded && !activeNavigationUrl_.empty()) {
+                    UpdateCurrentTabUrl(activeNavigationUrl_);
+                    RecordNavigation(activeNavigationUrl_);
+                } else {
+                    pendingHistoryIndex_.reset();
+                    pendingHistoryNavigationId_ = 0;
+                    if (!navigationHistory_.empty()) {
+                        UpdateCurrentTabUrl(navigationHistory_[navigationHistoryIndex_]);
+                    }
                 }
                 wil::unique_cotaskmem_string title;
                 if (webView_ && SUCCEEDED(webView_->get_DocumentTitle(&title)) && title) {
@@ -1514,6 +1538,9 @@ void Application::CloseWebView() {
     waitingNavigationId_ = 0;
     activeNavigationId_ = 0;
     activeNavigationTabIndex_ = -1;
+    activeNavigationUrl_.clear();
+    pendingHistoryIndex_.reset();
+    pendingHistoryNavigationId_ = 0;
     contentWaitStartedAt_ = 0;
     webZoom_.Detach();
     if (webView_) {
@@ -1602,7 +1629,11 @@ void Application::SwitchTab(int index) {
     state_.currentTabIndex = index;
     TabCtrl_SetCurSel(tabControl_, index);
     const TabData& tab = state_.tabs[static_cast<size_t>(index)];
+    ResetNavigationHistory(tab.url);
+    updatingAddressEdit_ = true;
     SetWindowTextW(addressEdit_, tab.url.c_str());
+    updatingAddressEdit_ = false;
+    addressEditDirty_ = false;
     UpdateBookmarkStar();
     if (webViewReady_) {
         NavigateTo(tab.url, true);
@@ -1630,8 +1661,65 @@ void Application::UpdateCurrentTabUrl(const std::wstring& url) {
     if (url.empty() || state_.currentTabIndex < 0 ||
         state_.currentTabIndex >= static_cast<int>(state_.tabs.size())) return;
     state_.tabs[static_cast<size_t>(state_.currentTabIndex)].url = url;
-    SetWindowTextW(addressEdit_, url.c_str());
+    if (!addressEditDirty_) {
+        updatingAddressEdit_ = true;
+        SetWindowTextW(addressEdit_, url.c_str());
+        updatingAddressEdit_ = false;
+    }
     UpdateBookmarkStar();
+}
+
+void Application::RecordNavigation(const std::wstring& url) {
+    if (url.empty()) return;
+    if (pendingHistoryIndex_) {
+        navigationHistoryIndex_ = *pendingHistoryIndex_;
+        navigationHistory_[navigationHistoryIndex_] = url;
+        pendingHistoryIndex_.reset();
+        pendingHistoryNavigationId_ = 0;
+    } else if (navigationHistory_.empty()) {
+        navigationHistory_.push_back(url);
+        navigationHistoryIndex_ = 0;
+    } else if (NormalizeComparableUrl(navigationHistory_[navigationHistoryIndex_]) !=
+               NormalizeComparableUrl(url)) {
+        navigationHistory_.erase(navigationHistory_.begin() +
+            static_cast<std::ptrdiff_t>(navigationHistoryIndex_ + 1), navigationHistory_.end());
+        navigationHistory_.push_back(url);
+        navigationHistoryIndex_ = navigationHistory_.size() - 1;
+    }
+    RefreshNavigationButtons();
+}
+
+void Application::NavigateHistory(int offset) {
+    if (navigationHistory_.empty()) return;
+    const auto target = static_cast<std::ptrdiff_t>(navigationHistoryIndex_) + offset;
+    if (target < 0 || target >= static_cast<std::ptrdiff_t>(navigationHistory_.size())) return;
+    const size_t targetIndex = static_cast<size_t>(target);
+    const std::wstring url = navigationHistory_[targetIndex];
+    NavigateTo(url, false, targetIndex);
+    logs_.Write(offset < 0 ? "navigation.back" : "navigation.forward",
+        "target=" + std::to_string(targetIndex));
+}
+
+void Application::ResetNavigationHistory(const std::wstring& url) {
+    navigationHistory_.clear();
+    if (!url.empty()) navigationHistory_.push_back(url);
+    navigationHistoryIndex_ = 0;
+    pendingHistoryIndex_.reset();
+    pendingHistoryNavigationId_ = 0;
+    RefreshNavigationButtons();
+}
+
+void Application::RefreshNavigationButtons() {
+    const bool canGoBack = !navigationHistory_.empty() && navigationHistoryIndex_ > 0;
+    const bool canGoForward = !navigationHistory_.empty() &&
+        navigationHistoryIndex_ + 1 < navigationHistory_.size();
+    EnableWindow(backButton_, canGoBack ? TRUE : FALSE);
+    EnableWindow(forwardButton_, canGoForward ? TRUE : FALSE);
+    logs_.Write("navigation.history",
+        "back=" + std::to_string(canGoBack ? 1 : 0) +
+        " forward=" + std::to_string(canGoForward ? 1 : 0) +
+        " index=" + std::to_string(navigationHistoryIndex_) +
+        " count=" + std::to_string(navigationHistory_.size()));
 }
 
 void Application::RebuildTabControl() {
@@ -1738,7 +1826,8 @@ std::wstring Application::CurrentTitle() const {
 }
 
 void Application::NavigateAddressBar() {
-    NavigateTo(NormalizeInputUrl(WindowText(addressEdit_)));
+    const std::wstring raw = WindowText(addressEdit_);
+    NavigateTo(NormalizeInputUrl(raw));
     SetFocus(mainWindow_);
 }
 
@@ -1805,12 +1894,21 @@ void Application::ShowBookmarkMenu() {
     }
 }
 
-void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) {
+void Application::NavigateTo(const std::wstring& url, bool concealUntilContent,
+                             std::optional<size_t> historyTarget) {
     const std::wstring normalized = NormalizeInputUrl(url);
     if (!IsSupportedWebNavigationUrl(normalized)) {
+        pendingHistoryIndex_.reset();
+        pendingHistoryNavigationId_ = 0;
         logs_.Write("navigation.unsupported_scheme");
         MessageBoxW(mainWindow_, L"Only HTTPS is allowed / Hanya HTTPS yang diizinkan.",
                     L"Veil Browser", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (!webView_) {
+        pendingHistoryIndex_.reset();
+        pendingHistoryNavigationId_ = 0;
+        logs_.Write("navigation.webview_unavailable");
         return;
     }
     // Each user navigation owns its own independent 5s health check.
@@ -1821,6 +1919,12 @@ void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) 
     }
     contentProbePending_ = false;
     ++contentProbeSerial_;
+    activeNavigationId_ = 0;
+    activeNavigationTabIndex_ = state_.currentTabIndex;
+    activeNavigationUrl_.clear();
+    pendingHistoryIndex_ = historyTarget;
+    pendingHistoryNavigationId_ = 0;
+    addressEditDirty_ = false;
     UpdateCurrentTabUrl(normalized);
     logs_.Write("navigation.requested",
         "generation=" + std::to_string(webViewGeneration_) +
@@ -1843,6 +1947,11 @@ void Application::NavigateTo(const std::wstring& url, bool concealUntilContent) 
         }
         const HRESULT result = webView_->Navigate(normalized.c_str());
         if (FAILED(result)) {
+            pendingHistoryIndex_.reset();
+            pendingHistoryNavigationId_ = 0;
+            if (!navigationHistory_.empty()) {
+                UpdateCurrentTabUrl(navigationHistory_[navigationHistoryIndex_]);
+            }
             logs_.Write("navigation.submit_failed",
                 "hr=" + std::to_string(static_cast<unsigned long>(result)));
             EndContentWait();

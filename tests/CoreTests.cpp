@@ -251,7 +251,7 @@ void TestVeilBrowserPolicy() {
     Check(CanCreateTab(0) && CanCreateTab(4) && !CanCreateTab(5),
           L"tab keenam ditolak");
     Check(IsSupportedWebNavigationUrl(L"https://example.com/path"), L"HTTPS diizinkan");
-    Check(IsSupportedWebNavigationUrl(L"https://[::1]/"), L"IPv6 HTTPS valid diizinkan");
+    Check(!IsSupportedWebNavigationUrl(L"https://[::1]/"), L"IPv6 ditolak fail-closed");
     Check(IsSupportedWebNavigationUrl(L"ABOUT:BLANK"), L"about:blank diizinkan");
     Check(!IsSupportedWebNavigationUrl(L"http://example.com"), L"HTTP ditolak");
     Check(!IsSupportedWebNavigationUrl(L"file:///C:/secret.txt"), L"file URL ditolak");

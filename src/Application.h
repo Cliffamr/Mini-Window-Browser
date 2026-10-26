@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace xiaochuang {
 
@@ -161,6 +162,10 @@ private:
     void SwitchTab(int index);
     void UpdateCurrentTabTitle(const std::wstring& title);
     void UpdateCurrentTabUrl(const std::wstring& url);
+    void RecordNavigation(const std::wstring& url);
+    void NavigateHistory(int offset);
+    void ResetNavigationHistory(const std::wstring& url);
+    void RefreshNavigationButtons();
     void RebuildTabControl();
     void HandleTabMouseDown(LPARAM lParam);
     void ShowTabContextMenu(POINT screenPoint);
@@ -172,7 +177,8 @@ private:
     void UpdateBookmarkStar();
     void ToggleCurrentBookmark();
     void ShowBookmarkMenu();
-    void NavigateTo(const std::wstring& url, bool concealUntilContent = false);
+    void NavigateTo(const std::wstring& url, bool concealUntilContent = false,
+                    std::optional<size_t> historyTarget = std::nullopt);
     void BeginContentWait();
     void EndContentWait();
     void ToggleHidden();
@@ -257,11 +263,17 @@ private:
     int chromeHeight_ = 84;
     bool shuttingDown_ = false;
     bool webViewReady_ = false;
+    bool addressEditDirty_ = false;
+    bool updatingAddressEdit_ = false;
 
     bool hotkeysStarted_ = false;
     bool inputGuardStarted_ = false;
     bool webViewRecoveryPending_ = false;
     UINT64 webViewGeneration_ = 0;
+    std::vector<std::wstring> navigationHistory_;
+    size_t navigationHistoryIndex_ = 0;
+    std::optional<size_t> pendingHistoryIndex_;
+    UINT64 pendingHistoryNavigationId_ = 0;
     std::shared_ptr<std::atomic_bool> lifetime_{std::make_shared<std::atomic_bool>(true)};
     bool trayIconAdded_ = false;
     std::wstring webViewVersion_;
@@ -289,7 +301,6 @@ private:
     EventRegistrationToken navigationStartingToken_{};
     EventRegistrationToken navigationCompletedToken_{};
     EventRegistrationToken contentLoadingToken_{};
-
     EventRegistrationToken fullscreenToken_{};
     EventRegistrationToken newWindowToken_{};
 
@@ -341,6 +352,7 @@ private:
     UINT64 waitingNavigationId_ = 0;
     UINT64 activeNavigationId_ = 0;
     int activeNavigationTabIndex_ = -1;
+    std::wstring activeNavigationUrl_;
     ULONGLONG contentWaitStartedAt_ = 0;
     int settingsScrollPosition_ = 0;
 
